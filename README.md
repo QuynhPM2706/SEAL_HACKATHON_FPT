@@ -9,10 +9,10 @@ Team Member:
 
  Phạm Mạnh Quỳnh - Frontend Developer - HTML, CSS
  
- Nguyễn Trường Vinh Frontend Developer - HTML, CSS
+ Nguyễn Trường Vinh Frontend Developer - HTML, CSS, ReactJS
  
- Trần Trúc Vỹ  Backend Developer - .NET
+ Trần Trúc Vỹ  Backend Developer - .NET, Java
  
- Phan Nguyễn Đình Khôi Backend Developer - Spring Boot
+ Phan Nguyễn Đình Khôi Backend Developer - Spring Boot, Java
  
-Phan Lại Phong  Backend Developer - .NET
+Phan Lại Phong  Backend Developer - Spring Boot, Java
