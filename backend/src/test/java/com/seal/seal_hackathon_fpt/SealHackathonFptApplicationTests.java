@@ -1,13 +1,23 @@
-package com.seal.seal_hackathon_fpt;
+package com.seal.seal_hackathon_fpt.security;
 
-import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.web.SecurityFilterChain;
 
-@SpringBootTest
-class SealHackathonFptApplicationTests {
+@Configuration
+public class SecurityConfig {
 
-    @Test
-    void contextLoads() {
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+
+        http
+                .csrf(csrf -> csrf.disable())
+
+                .authorizeHttpRequests(auth -> auth
+                        .anyRequest().permitAll()
+                );
+
+        return http.build();
     }
-
 }
