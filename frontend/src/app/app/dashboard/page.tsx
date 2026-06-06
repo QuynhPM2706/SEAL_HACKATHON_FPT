@@ -66,7 +66,7 @@ export default function Dashboard() {
       <div className="mt-6 grid lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 rounded-xl border bg-card">
           <div className="p-5 border-b flex items-center justify-between">
-            <h3 className="font-semibold">Active competitions</h3>
+            <h3 className="font-semibold">Competitions</h3>
             <Badge variant="outline">{competitions.length}</Badge>
           </div>
           <div className="divide-y">
@@ -225,7 +225,7 @@ function CompetitionRow({ c, canRegister }: { c: CompetitionFull; canRegister: b
           </div>
           <div>
             <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Rules</div>
-            <div className="text-[11px] text-muted-foreground mb-2">Quy chế chung — áp dụng cho mọi cuộc thi</div>
+            <div className="text-[11px] text-muted-foreground mb-2">Global rules — applied to every competition</div>
             <ul className="list-disc pl-5 space-y-1 text-sm text-muted-foreground">
               {activeRules.map((r) => (
                 <li key={r.id}>{r.text}</li>

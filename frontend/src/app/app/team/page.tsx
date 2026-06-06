@@ -90,7 +90,7 @@ export default function TeamPage() {
     <div>
       <PageHeader
         title="My team"
-        subtitle={`Participant · ${user?.email}${currentLabel ? ` · Đang tham gia: ${currentLabel}` : ""}`}
+        subtitle={`Participant · ${user?.email}${currentLabel ? ` · Participating in: ${currentLabel}` : ""}`}
         action={<Badge variant="outline" className="text-[11px]">1 team / season</Badge>}
       />
 
@@ -385,7 +385,7 @@ function PastResultRow({ p }: { p: PastResult }) {
               <div className="rounded-md border bg-warning/5 border-warning/40 p-3 flex items-center gap-3">
                 <Award className="h-8 w-8 text-warning shrink-0" />
                 <div>
-                  <div className="text-xs uppercase tracking-wider text-muted-foreground">Giải thưởng đạt được</div>
+                  <div className="text-xs uppercase tracking-wider text-muted-foreground">Prize won</div>
                   <div className="font-semibold">{prize.rank}</div>
                   <div className="text-sm text-warning">{prize.amount}</div>
                 </div>
@@ -410,7 +410,7 @@ function PastResultRow({ p }: { p: PastResult }) {
 
             {comp && (
               <div className="rounded-md border p-3">
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Điểm từng vòng</div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Score per round</div>
                 <table className="w-full text-sm">
                   <tbody className="divide-y">
                     {comp.rounds.map((r) => {
@@ -432,16 +432,16 @@ function PastResultRow({ p }: { p: PastResult }) {
             {metrics && (
               <div className="rounded-md border p-3">
                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-1.5">
-                  <Star className="h-3 w-3" /> Độ uy tín mùa giải
+                  <Star className="h-3 w-3" /> Season reputation
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                  <Metric label="Tổ chức" value={`${metrics.starsOrganization.toFixed(1)}★`} />
+                  <Metric label="Organization" value={`${metrics.starsOrganization.toFixed(1)}★`} />
                   <Metric label="Mentorship" value={`${metrics.starsMentorship.toFixed(1)}★`} />
-                  <Metric label="Chấm điểm" value={`${metrics.starsJudging.toFixed(1)}★`} />
-                  <Metric label="Giải thưởng" value={`${metrics.starsPrizes.toFixed(1)}★`} />
+                  <Metric label="Judging" value={`${metrics.starsJudging.toFixed(1)}★`} />
+                  <Metric label="Prizes" value={`${metrics.starsPrizes.toFixed(1)}★`} />
                 </div>
                 <div className="mt-2 text-xs text-muted-foreground">
-                  NPS <span className="font-semibold text-foreground">{metrics.npsScore}</span> · {metrics.responseCount} đánh giá
+                  NPS <span className="font-semibold text-foreground">{metrics.npsScore}</span> · {metrics.responseCount} reviews
                 </div>
               </div>
             )}
