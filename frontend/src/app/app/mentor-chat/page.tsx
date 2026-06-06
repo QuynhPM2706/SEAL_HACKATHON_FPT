@@ -138,7 +138,7 @@ export default function MentorChat() {
                         respondMentorInvite(inv.id, "accepted");
                         toast.success(`You are now mentor for ${inv.teamName}`);
                       } catch (e) {
-                        toast.error(e instanceof Error ? e.message : "Không thể nhận đội");
+                        toast.error(e instanceof Error ? e.message : "Couldn't accept the team");
                       }
                     }}
                   >
