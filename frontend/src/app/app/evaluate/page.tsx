@@ -50,7 +50,7 @@ function Evaluate() {
 
   if (!t || !r) return <div className="text-sm text-muted-foreground">Team or round not found.</div>;
   if (t.mentorId === user?.id) {
-    return <div className="rounded-md border border-warning/40 bg-warning/10 text-warning p-4 text-sm">Bạn là mentor của đội này — không thể chấm điểm (xung đột lợi ích).</div>;
+    return <div className="rounded-md border border-warning/40 bg-warning/10 text-warning p-4 text-sm">You mentor this team — you can't score it (conflict of interest).</div>;
   }
 
   const submit = () => {
@@ -136,7 +136,7 @@ function SubmissionViewer({ team, round }: { team: Team; round: Round }) {
               </a>
             </div>
           ) : (
-            <p className="text-xs text-muted-foreground">Team chưa nộp GitHub repository</p>
+            <p className="text-xs text-muted-foreground">Team hasn't submitted a GitHub repository</p>
           )}
         </div>
 
@@ -160,7 +160,7 @@ function SubmissionViewer({ team, round }: { team: Team; round: Round }) {
               </a>
             )
           ) : (
-            <p className="text-xs text-muted-foreground">Team chưa nộp video demo</p>
+            <p className="text-xs text-muted-foreground">Team hasn't submitted a demo video</p>
           )}
         </div>
 
@@ -174,13 +174,13 @@ function SubmissionViewer({ team, round }: { team: Team; round: Round }) {
                   <ExternalLink className="h-3 w-3" />Open
                 </a>
               ) : (
-                <button onClick={() => toast.message("PDF demo — chưa có file thực")} className="text-xs inline-flex items-center gap-1 px-2 py-1 rounded border hover:bg-accent shrink-0">
+                <button onClick={() => toast.message("PDF demo — no real file yet")} className="text-xs inline-flex items-center gap-1 px-2 py-1 rounded border hover:bg-accent shrink-0">
                   Download
                 </button>
               )}
             </div>
           ) : (
-            <p className="text-xs text-muted-foreground">Team chưa nộp pitch deck</p>
+            <p className="text-xs text-muted-foreground">Team hasn't submitted a pitch deck</p>
           )}
         </div>
 
@@ -201,7 +201,7 @@ function SubmissionViewer({ team, round }: { team: Team; round: Round }) {
 
       <div className="p-4 border-t">
         <p className="text-xs text-muted-foreground italic">
-          Vui lòng xem bài nộp trước khi cho điểm. Mọi điểm sẽ chuyển trạng thái PENDING_REVIEW chờ Coordinator duyệt.
+          Please review the submission before scoring. All scores go to PENDING_REVIEW awaiting Coordinator approval.
         </p>
       </div>
     </div>
