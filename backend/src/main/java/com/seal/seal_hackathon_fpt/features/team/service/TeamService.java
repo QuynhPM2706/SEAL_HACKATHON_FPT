@@ -7,36 +7,63 @@ import com.seal.seal_hackathon_fpt.features.team.repository.TeamRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
+import java.util.List;
+
 @Service
 @RequiredArgsConstructor
 public class TeamService {
+
     private final TeamRepository teamRepository;
     private final TeamMemberRepository memberRepository;
 
     public Team createTeam(Team team, Long creatorUserId) {
         Team savedTeam = teamRepository.save(team);
 
-        // Tự động gán người tạo làm Leader
         addMemberToTeam(savedTeam.getId(), creatorUserId, true);
+
         return savedTeam;
     }
 
+    public List<Team> getAllTeams() {
+        return teamRepository.findAll();
+    }
+
+    public Team getTeamById(Long teamId) {
+        return teamRepository.findById(teamId)
+                .orElseThrow(() -> new RuntimeException("Team not found"));
+    }
+
+    public List<TeamMember> getMembersByTeamId(Long teamId) {
+        return memberRepository.findByTeamId(teamId);
+    }
+
     public TeamMember addMemberToTeam(Long teamId, Long userId, boolean isLeader) {
-        // [BUSINESS RULE: User không được join nhiều lần trong cùng 1 team]
-        if (memberRepository.existsByTeamIdAndUserId(teamId, userId)) {
-            throw new RuntimeException("User is already in this team!");
+        if (!teamRepository.existsById(teamId)) {
+            throw new RuntimeException("Team not found");
         }
 
-        // [BUSINESS RULE: 1 Leader / Team]
+        if (memberRepository.existsByTeamIdAndUserId(teamId, userId)) {
+            throw new RuntimeException("User is already in this team");
+        }
+
+        long memberCount = memberRepository.countByTeamId(teamId);
+
+        if (memberCount >= 5) {
+            throw new RuntimeException("Team cannot have more than 5 members");
+        }
+
         if (isLeader && memberRepository.existsByTeamIdAndIsLeaderTrue(teamId)) {
-            throw new RuntimeException("This team already has a Leader! Cannot add another Leader.");
+            throw new RuntimeException("This team already has a leader");
         }
 
         TeamMember member = TeamMember.builder()
                 .teamId(teamId)
                 .userId(userId)
                 .isLeader(isLeader)
+                .joinedAt(LocalDateTime.now())
                 .build();
+
         return memberRepository.save(member);
     }
 
@@ -44,9 +71,10 @@ public class TeamService {
         TeamMember member = memberRepository.findByTeamIdAndUserId(teamId, userId)
                 .orElseThrow(() -> new RuntimeException("Member not found"));
 
-        if (member.getIsLeader()) {
-            throw new RuntimeException("Cannot remove the Leader. Please transfer leadership first.");
+        if (Boolean.TRUE.equals(member.getIsLeader())) {
+            throw new RuntimeException("Cannot remove the leader");
         }
+
         memberRepository.delete(member);
     }
 }
