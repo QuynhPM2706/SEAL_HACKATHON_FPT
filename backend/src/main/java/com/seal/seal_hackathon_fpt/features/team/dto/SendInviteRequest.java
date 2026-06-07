@@ -5,5 +5,5 @@ import lombok.Data;
 @Data
 public class SendInviteRequest {
     private Long teamId;
-    private Long inviteeId;
+    private String email;
 }
