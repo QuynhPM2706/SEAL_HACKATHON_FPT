@@ -18,42 +18,72 @@ public class TeamController {
     private final TeamService teamService;
     private final TeamInviteService inviteService;
 
-    // --- TEAM CRUD ---
     @PostMapping
     public ResponseEntity<?> createTeam(@RequestBody CreateTeamRequest request) {
-        Long currentUserId = 1L; // Mock ID người tạo (Sẽ đổi thành lấy từ JWT sau)
+        Long currentUserId = 1L;
+
         Team team = Team.builder()
                 .competitionId(request.getCompetitionId())
                 .name(request.getName())
                 .build();
+
         return ResponseEntity.ok(teamService.createTeam(team, currentUserId));
     }
 
-    // --- TEAM MEMBER API ---
+    @GetMapping
+    public ResponseEntity<?> getAllTeams() {
+        return ResponseEntity.ok(teamService.getAllTeams());
+    }
+
+    @GetMapping("/{teamId}")
+    public ResponseEntity<?> getTeamById(@PathVariable Long teamId) {
+        return ResponseEntity.ok(teamService.getTeamById(teamId));
+    }
+
+    @GetMapping("/{teamId}/members")
+    public ResponseEntity<?> getTeamMembers(@PathVariable Long teamId) {
+        return ResponseEntity.ok(teamService.getMembersByTeamId(teamId));
+    }
+
     @PostMapping("/{teamId}/members")
     public ResponseEntity<?> addMember(
             @PathVariable Long teamId,
             @RequestBody AddMemberRequest request) {
-        return ResponseEntity.ok(teamService.addMemberToTeam(teamId, request.getUserId(), request.getIsLeader()));
+
+        return ResponseEntity.ok(
+                teamService.addMemberToTeam(teamId, request.getUserId(), false)
+        );
     }
 
     @DeleteMapping("/{teamId}/members/{userId}")
-    public ResponseEntity<?> removeMember(@PathVariable Long teamId, @PathVariable Long userId) {
+    public ResponseEntity<?> removeMember(
+            @PathVariable Long teamId,
+            @PathVariable Long userId) {
+
         teamService.removeMember(teamId, userId);
         return ResponseEntity.ok("Member removed successfully");
     }
 
-    // --- TEAM INVITE API ---
     @PostMapping("/invites")
     public ResponseEntity<?> sendInvite(@RequestBody SendInviteRequest request) {
-        Long currentUserId = 1L; // Mock ID người gửi mời
-        return ResponseEntity.ok(inviteService.sendInvite(request.getTeamId(), currentUserId, request.getInviteeId()));
+        Long currentUserId = 1L;
+
+        return ResponseEntity.ok(
+                inviteService.sendInvite(
+                        request.getTeamId(),
+                        currentUserId,
+                        request.getEmail()
+                )
+        );
     }
 
     @PostMapping("/invites/{inviteId}/accept")
     public ResponseEntity<?> acceptInvite(@PathVariable Long inviteId) {
-        Long currentUserId = 2L; // Mock ID người được mời
-        inviteService.acceptInvite(inviteId, currentUserId);
+        Long currentUserId = 2L;
+        String currentUserEmail = "member@gmail.com";
+
+        inviteService.acceptInvite(inviteId, currentUserId, currentUserEmail);
+
         return ResponseEntity.ok("Invitation accepted and joined the team successfully");
     }
 }

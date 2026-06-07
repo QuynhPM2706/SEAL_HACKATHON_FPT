@@ -5,12 +5,19 @@ import lombok.*;
 
 @Entity
 @Table(name = "teams")
-@Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
 public class Team {
-    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
     @Column(name = "competition_id")
     private Long competitionId;
+
     private String name;
 }
-
