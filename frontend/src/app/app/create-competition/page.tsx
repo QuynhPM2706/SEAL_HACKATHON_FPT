@@ -5,9 +5,10 @@ import * as React from "react";
 import { PageHeader } from "@/components/app-shell";
 import { useAuth } from "@/lib/auth";
 import {
-  useCompetitionStore, addYear, addSeason, createCompetition, useGlobalRules,
+  useCompetitionStore, addYear, addSeason, useGlobalRules,
   type CompetitionFull, type PrizeTier, type ScoringCriterionDef, type CompetitionRound,
 } from "@/lib/competition-store";
+import { buildCreateCompetitionPayload } from "@/lib/competition";
 import { createCompetitionApi } from "@/lib/competitions-api";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -90,6 +91,19 @@ export default function Wizard() {
     }
     setSaving(true);
     try {
+      const payload = buildCreateCompetitionPayload({
+        seasonId: 1,
+        name: s.name,
+        description: s.description,
+        status,
+        format: s.format,
+        startDate: s.startDate,
+      });
+
+      await createCompetitionApi(payload);
+
+      toast.success(`Competition ${status === "Open" ? "published" : "saved as draft"}.`);
+
       // 1) Ghi 5 trường lõi xuống BACKEND THẬT (Spring Boot + SQL Server).
       const saved = await createCompetitionApi({
         name: s.name,
@@ -102,6 +116,7 @@ export default function Wizard() {
       //    khác vẫn chạy, đồng thời gắn backendId để biết nó đã có trên server.
       createCompetition({ ...s, status, createdBy: user.id, backendId: saved.id });
       toast.success(`Saved to backend (id #${saved.id}) — ${status === "Open" ? "published" : "draft"}.`);
+
       router.push("/app/event-control");
     } catch (e) {
       toast.error(`Backend error: ${(e as Error).message}. Make sure the backend is running at http://localhost:8080.`);
