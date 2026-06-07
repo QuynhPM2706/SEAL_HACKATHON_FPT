@@ -3,17 +3,36 @@ package com.seal.seal_hackathon_fpt.features.team.entity;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.time.LocalDateTime;
+
 @Entity
 @Table(name = "team_member_invites")
-@Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
 public class TeamInvite {
-    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    private String token;
+
     @Column(name = "team_id")
     private Long teamId;
-    @Column(name = "inviter_id")
-    private Long inviterId;
-    @Column(name = "invitee_id")
-    private Long inviteeId;
-    private String status; // PENDING, ACCEPTED, REJECTED
+
+    private String track;
+
+    @Column(name = "to_email")
+    private String toEmail;
+
+    @Column(name = "from_user_id")
+    private Long fromUserId;
+
+    private String status;
+
+    @Column(name = "created_at")
+    private LocalDateTime createdAt;
 }
