@@ -1,15 +1,13 @@
 package com.seal.seal_hackathon_fpt.features.team.service;
 
-import com.seal.seal_hackathon_fpt.common.mail.MailService;
 import com.seal.seal_hackathon_fpt.features.competition.entity.Competition;
 import com.seal.seal_hackathon_fpt.features.competition.repository.CompetitionRepository;
-import com.seal.seal_hackathon_fpt.features.team.dto.InviteCompetitionInfoResponse;
 import com.seal.seal_hackathon_fpt.features.team.entity.Team;
 import com.seal.seal_hackathon_fpt.features.team.entity.TeamInvite;
 import com.seal.seal_hackathon_fpt.features.team.repository.TeamInviteRepository;
 import com.seal.seal_hackathon_fpt.features.team.repository.TeamRepository;
+import com.seal.seal_hackathon_fpt.features.team.dto.InviteCompetitionInfoResponse;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -23,39 +21,42 @@ public class TeamInviteService {
     private final TeamService teamService;
     private final TeamRepository teamRepository;
     private final CompetitionRepository competitionRepository;
-    private final MailService mailService;
-
-    @Value("${app.frontend-url}")
-    private String frontendUrl;
 
     public TeamInvite sendInvite(Long teamId, Long inviterId, String email) {
+        if (email == null || email.trim().isEmpty()) {
+            throw new RuntimeException("Email is required");
+        }
+
+        String normalizedEmail = email.trim().toLowerCase();
+
+        if (!normalizedEmail.matches("^[A-Za-z0-9._%+-]+@gmail\\.com$")) {
+            throw new RuntimeException("Email must be a valid Gmail address");
+        }
+
         Team team = teamRepository.findById(teamId)
                 .orElseThrow(() -> new RuntimeException("Team not found"));
 
         Competition competition = competitionRepository.findById(team.getCompetitionId())
                 .orElseThrow(() -> new RuntimeException("Competition not found"));
 
+        if (
+                competition.getRegistrationDeadline() != null &&
+                        LocalDateTime.now().isAfter(competition.getRegistrationDeadline())
+        ) {
+            throw new RuntimeException("Registration deadline has passed. Cannot invite member.");
+        }
+
         TeamInvite invite = TeamInvite.builder()
                 .teamId(teamId)
                 .fromUserId(inviterId)
-                .toEmail(email)
+                .toEmail(normalizedEmail)
+                .token(UUID.randomUUID().toString())
                 .track("TEAM_INVITE")
                 .status("PENDING")
                 .createdAt(LocalDateTime.now())
                 .build();
 
-        TeamInvite savedInvite = inviteRepository.save(invite);
-
-        String competitionLink = frontendUrl + "/competitions/" + competition.getId();
-
-        mailService.sendTeamInviteEmail(
-                email,
-                team.getName(),
-                competition.getName(),
-                competitionLink
-        );
-
-        return savedInvite;
+        return inviteRepository.save(invite);
     }
 
     public void acceptInvite(Long inviteId, Long currentUserId, String currentUserEmail) {

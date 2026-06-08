@@ -40,6 +40,7 @@ import { toast } from "sonner";
 import { statusBadgeClass, trackBadgeClass } from "@/lib/utils";
 import {
   getMyTeamApi,
+  createTeamApi,
   createTeamInviteApi,
   type Team,
   type TeamMember,
@@ -76,8 +77,12 @@ export default function TeamPage() {
   const [myTeam, setMyTeam] = React.useState<Team | null>(null);
   const [teamMembers, setTeamMembers] = React.useState<TeamMember[]>([]);
   const [loadingTeam, setLoadingTeam] = React.useState(true);
+
   const [inviteEmail, setInviteEmail] = React.useState("");
   const [isLeader, setIsLeader] = React.useState(false);
+
+  const [teamName, setTeamName] = React.useState("");
+  const [creatingTeam, setCreatingTeam] = React.useState(false);
 
   const openCompetitions = competitions.filter(
       (c) => c.status === "Open" || c.status === "Active" || c.status === "Scoring"
@@ -107,31 +112,74 @@ export default function TeamPage() {
     round: CompetitionRound;
   } | null>(null);
 
+  const loadTeam = React.useCallback(async () => {
+    try {
+      setLoadingTeam(true);
+
+      const data = await getMyTeamApi();
+
+      console.log("MY TEAM DATA:", data);
+
+      setMyTeam(data.team);
+      setTeamMembers(data.members ?? []);
+      setIsLeader(Boolean(data.isLeader ?? data.leader));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load team");
+
+      setMyTeam(null);
+      setTeamMembers([]);
+      setIsLeader(false);
+    } finally {
+      setLoadingTeam(false);
+    }
+  }, []);
+
   React.useEffect(() => {
-    async function loadTeam() {
-      try {
-        setLoadingTeam(true);
+    loadTeam();
+  }, [loadTeam]);
 
-        const data = await getMyTeamApi();
+  const createTeam = async () => {
+    const name = teamName.trim();
 
-        console.log("MY TEAM DATA:", data);
-
-        setMyTeam(data.team);
-        setTeamMembers(data.members ?? []);
-        setIsLeader(Boolean(data.isLeader ?? data.leader));
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to load team");
-
-        setMyTeam(null);
-        setTeamMembers([]);
-        setIsLeader(false);
-      } finally {
-        setLoadingTeam(false);
-      }
+    if (!name) {
+      toast.error("Team name is required");
+      return;
     }
 
-    loadTeam();
-  }, []);
+    if (!currentComp) {
+      toast.error("No open competition found");
+      return;
+    }
+
+    try {
+      setCreatingTeam(true);
+
+      const payload = {
+        competitionId: Number(currentComp.id),
+        name,
+      };
+
+      console.log("CREATE TEAM PAYLOAD:", payload);
+
+      const created = await createTeamApi(payload);
+
+      console.log("CREATED TEAM:", created);
+
+      toast.success("Team created successfully");
+      setTeamName("");
+
+      await loadTeam();
+    } catch (error) {
+      console.error("CREATE TEAM ERROR:", error);
+
+      toast.error(
+          error instanceof Error ? error.message : "Failed to create team"
+      );
+    } finally {
+      setCreatingTeam(false);
+    }
+  };
+
   const addMember = async () => {
     if (!myTeam) {
       toast.error("You are not in a team");
@@ -143,10 +191,12 @@ export default function TeamPage() {
       return;
     }
 
-    const email = inviteEmail.trim();
+    const email = inviteEmail.trim().toLowerCase();
 
-    if (!email.includes("@")) {
-      toast.error("Invalid email");
+    const gmailRegex = /^[a-zA-Z0-9._%+-]+@gmail\.com$/;
+
+    if (!gmailRegex.test(email)) {
+      toast.error("Email must be a valid Gmail address");
       return;
     }
 
@@ -189,9 +239,42 @@ export default function TeamPage() {
             {!loadingTeam && !myTeam && (
                 <div className="rounded-xl border bg-card p-6">
                   <div className="font-semibold">You are not in a team yet</div>
+
                   <p className="text-sm text-muted-foreground mt-1">
                     Create or join a team to participate in this competition.
                   </p>
+
+                  <div className="mt-4 space-y-2">
+                    <Label>Team name</Label>
+
+                    <div className="flex gap-2">
+                      <Input
+                          value={teamName}
+                          onChange={(e) => setTeamName(e.target.value)}
+                          placeholder="Enter your team name"
+                      />
+
+                      <Button
+                          onClick={createTeam}
+                          disabled={creatingTeam || !currentComp}
+                          className="btn-gradient text-primary-foreground"
+                      >
+                        {creatingTeam ? "Creating..." : "Create Team"}
+                      </Button>
+                    </div>
+
+                    {!currentComp && (
+                        <p className="text-xs text-muted-foreground">
+                          No open competition is available.
+                        </p>
+                    )}
+
+                    {currentComp && (
+                        <p className="text-xs text-muted-foreground">
+                          Creating team for: {currentComp.name}
+                        </p>
+                    )}
+                  </div>
                 </div>
             )}
 
@@ -206,7 +289,9 @@ export default function TeamPage() {
                       <div className="font-semibold">{myTeam.name}</div>
                       <div className="text-xs text-muted-foreground flex items-center gap-2 mt-1">
                         Status:
-                        <Badge variant="outline">{myTeam.status ?? "INCOMPLETE"}</Badge>
+                        <Badge variant="outline">
+                          {myTeam.status ?? "INCOMPLETE"}
+                        </Badge>
                       </div>
                     </div>
 
@@ -280,7 +365,10 @@ export default function TeamPage() {
                   const cYear = years.find((y) => y.id === c.yearId);
 
                   return (
-                      <div key={c.id} className="rounded-xl border bg-card overflow-hidden">
+                      <div
+                          key={c.id}
+                          className="rounded-xl border bg-card overflow-hidden"
+                      >
                         <button
                             onClick={() => setExpandedId(expanded ? null : c.id)}
                             className="w-full flex items-center gap-3 p-4 text-left hover:bg-muted/30 transition-colors"
@@ -317,8 +405,13 @@ export default function TeamPage() {
                             </div>
                           </div>
 
-                          <Badge className={statusBadgeClass(c.status)}>{c.status}</Badge>
-                          <Badge variant="outline">{c.rounds.length} rounds</Badge>
+                          <Badge className={statusBadgeClass(c.status)}>
+                            {c.status}
+                          </Badge>
+
+                          <Badge variant="outline">
+                            {c.rounds?.length ?? 0} rounds
+                          </Badge>
 
                           {expanded ? (
                               <ChevronDown className="h-4 w-4 text-muted-foreground" />
@@ -333,13 +426,21 @@ export default function TeamPage() {
                                 Rounds
                               </div>
 
-                              {c.rounds.map((r) => (
+                              {(c.rounds ?? []).length === 0 && (
+                                  <div className="text-sm text-muted-foreground rounded-md border bg-card p-3">
+                                    No rounds configured yet.
+                                  </div>
+                              )}
+
+                              {(c.rounds ?? []).map((r) => (
                                   <div
                                       key={r.id}
                                       className="rounded-md border bg-card p-3 flex items-center justify-between gap-3"
                                   >
                                     <div className="min-w-0">
-                                      <div className="font-medium text-sm">{r.name}</div>
+                                      <div className="font-medium text-sm">
+                                        {r.name}
+                                      </div>
                                       <div className="text-xs text-muted-foreground">
                                         Due {r.start.replace("T", " ")}
                                       </div>
