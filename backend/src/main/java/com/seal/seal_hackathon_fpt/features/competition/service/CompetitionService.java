@@ -50,12 +50,33 @@ public class CompetitionService {
     // Đã thêm: Tham số truyền vào là DTO (UpdateCompetitionRequest)
     public Competition update(Long id, UpdateCompetitionRequest request) {
         Competition existing = getById(id);
-        existing.setName(request.getName());
-        existing.setDescription(request.getDescription());
-        existing.setStatus(request.getStatus());
-        existing.setFormat(request.getFormat());
-        existing.setStartDate(request.getStartDate());
-        existing.setRegistrationDeadline(request.getRegistrationDeadline());
+
+        if (request.getName() != null) {
+            existing.setName(request.getName());
+        }
+
+        if (request.getDescription() != null) {
+            existing.setDescription(request.getDescription());
+        }
+
+        if (request.getStatus() != null) {
+            existing.setStatus(request.getStatus());
+        }
+
+        if (request.getFormat() != null) {
+            existing.setFormat(request.getFormat());
+        } else if (existing.getFormat() == null) {
+            existing.setFormat(Competition.Format.Offline);
+        }
+
+        if (request.getStartDate() != null) {
+            existing.setStartDate(request.getStartDate());
+        }
+
+        if (request.getRegistrationDeadline() != null) {
+            existing.setRegistrationDeadline(request.getRegistrationDeadline());
+        }
+
         return competitionRepository.save(existing);
     }
 }
