@@ -38,27 +38,10 @@ export type MyTeamResponse = {
     leader?: boolean;
 };
 
-export async function getTeamsApi(): Promise<Team[]> {
-    return apiGet<Team[]>("/api/teams");
-}
-
-export async function getTeamMembersApi(teamId: number): Promise<TeamMember[]> {
-    return apiGet<TeamMember[]>(`/api/teams/${teamId}/members`);
-}
-
-export async function getMyTeamApi(): Promise<MyTeamResponse> {
-    return apiGet<MyTeamResponse>("/api/teams/my-team");
-}
-
-
-
-export async function createTeamInviteApi(
-    teamId: number,
-    email: string
-): Promise<TeamInvite> {
-    return apiPost<TeamInvite>(`/api/teams/${teamId}/invites`, { email });
-}
-
+export type CreateTeamRequest = {
+    competitionId: number;
+    name: string;
+};
 
 export type InviteCompetitionInfoResponse = {
     team: Team;
@@ -75,6 +58,58 @@ export type InviteCompetitionInfoResponse = {
     inviteStatus: string;
 };
 
+/**
+ * GET /api/teams
+ * Lấy danh sách team.
+ */
+export async function getTeamsApi(): Promise<Team[]> {
+    return apiGet<Team[]>("/api/teams");
+}
+
+/**
+ * GET /api/teams/{teamId}/members
+ * Lấy danh sách member của team.
+ */
+export async function getTeamMembersApi(teamId: number): Promise<TeamMember[]> {
+    return apiGet<TeamMember[]>(`/api/teams/${teamId}/members`);
+}
+
+/**
+ * GET /api/teams/my-team
+ * Lấy team của user đang đăng nhập.
+ * Backend tự lấy userId từ JWT, không truyền userId từ FE nữa.
+ */
+export async function getMyTeamApi(): Promise<MyTeamResponse> {
+    return apiGet<MyTeamResponse>("/api/teams/my-team");
+}
+
+/**
+ * POST /api/teams
+ * Tạo team mới.
+ * Backend tự lấy creator/currentUser từ JWT.
+ */
+export async function createTeamApi(
+    data: CreateTeamRequest
+): Promise<Team> {
+    return apiPost<Team>("/api/teams", data);
+}
+
+/**
+ * POST /api/teams/{teamId}/invites
+ * Leader gửi lời mời member bằng email.
+ */
+export async function createTeamInviteApi(
+    teamId: number,
+    email: string
+): Promise<TeamInvite> {
+    return apiPost<TeamInvite>(`/api/teams/${teamId}/invites`, { email });
+}
+
+/**
+ * GET /api/teams/invites/token/{token}
+ * Lấy thông tin invite bằng token.
+ * Phần này chỉ dùng nếu bạn còn giữ trang /invite/[token].
+ */
 export async function getInviteInfoApi(
     token: string
 ): Promise<InviteCompetitionInfoResponse> {
