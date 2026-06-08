@@ -18,6 +18,7 @@ public class TeamInvite {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(nullable = false)
     private String token;
 
     @Column(name = "team_id")
