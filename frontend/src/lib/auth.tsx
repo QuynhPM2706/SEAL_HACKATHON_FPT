@@ -105,6 +105,7 @@ interface AuthCtx {
   login: (email: string, password: string) => Promise<User>;
   logout: () => void;
   register: (input: RegisterInput) => Promise<void>;
+  refreshSession: () => Promise<void>;
   approveUser: (userId: string) => void;
   suspendUser: (userId: string) => void;
   reactivateUser: (userId: string) => void;
@@ -159,6 +160,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return u;
     },
     logout: () => persistSession(null),
+    // Tải lại hồ sơ từ /api/auth/me (vd sau khi sửa Profile) để header cập nhật tên.
+    refreshSession: async () => {
+      try {
+        const me = await apiGet<MeResponse>("/api/auth/me");
+        persistSession({ id: String(me.id), name: me.name, email: me.email, role: me.role, status: "active" });
+      } catch { /* giữ nguyên session cũ nếu lỗi */ }
+    },
     // Logic MỚI: Participant đăng ký -> backend tạo tài khoản status "pending"
     // (KHÔNG cấp token). Tài khoản phải được Admin/Coordinator duyệt mới đăng
     // nhập được -> ở đây KHÔNG tự đăng nhập, chỉ gọi API tạo rồi để trang
