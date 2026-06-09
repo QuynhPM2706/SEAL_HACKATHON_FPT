@@ -13,8 +13,9 @@ import { useViewMode, useEffectiveRole } from "@/lib/view-mode";
 import {
   Bot, LayoutDashboard, Trophy, Users, MessageCircle, Gavel, Settings2,
   ShieldCheck, BarChart3, Bell, LogOut, Search, ChevronRight, ClipboardList,
-  Sliders, UserPlus, UserCheck, FileText, FilePlus,
+  Sliders, UserPlus, UserCheck, FileText, FilePlus, User as UserIcon, ChevronDown,
 } from "lucide-react";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Toaster } from "@/components/ui/sonner";
@@ -249,17 +250,30 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </Link>
               </PopoverContent>
             </Popover>
-            <div className="flex items-center gap-2.5 pl-2 border-l">
-              <div className="h-8 w-8 rounded-full btn-gradient grid place-items-center text-xs font-semibold text-primary-foreground">
-                {initials}
-              </div>
-              <div className="leading-tight hidden sm:block">
-                <div className="text-xs font-medium">{user.name}</div>
-                <div className="text-[10px] text-muted-foreground">
-                  {user.role}{isLecturer ? ` · ${viewMode} mode` : ""}
-                </div>
-              </div>
-            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="flex items-center gap-2.5 pl-2 border-l hover:opacity-90" aria-label="Account menu">
+                  <div className="h-8 w-8 rounded-full btn-gradient grid place-items-center text-xs font-semibold text-primary-foreground">
+                    {initials}
+                  </div>
+                  <div className="leading-tight hidden sm:block text-left">
+                    <div className="text-xs font-medium">{user.name}</div>
+                    <div className="text-[10px] text-muted-foreground">
+                      {user.role}{isLecturer ? ` · ${viewMode} mode` : ""}
+                    </div>
+                  </div>
+                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem onClick={() => router.push("/app/profile")}>
+                  <UserIcon className="h-3.5 w-3.5 mr-2" /> Profile
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleSignOut} className="text-destructive">
+                  <LogOut className="h-3.5 w-3.5 mr-2" /> Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </header>
         <main className="flex-1 grid-bg px-4 md:px-8 py-6">{children}</main>
