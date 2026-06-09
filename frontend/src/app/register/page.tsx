@@ -29,8 +29,16 @@ export default function RegisterPage() {
     e.preventDefault();
     if (!email.includes("@")) { toast.error("Enter a valid email"); return; }
     if (password.length < 6) { toast.error("Password must be ≥ 6 chars"); return; }
-    if (!studentId) { toast.error("Student ID is required"); return; }
-    if (!isFPT && !school) { toast.error("Specify your school"); return; }
+    if (isFPT) {
+      // Sinh viên FPT: mã ngành SE + 6 số (vd SE193799).
+      if (!/^SE\d{6}$/i.test(studentId.trim())) {
+        toast.error("FPT student ID must be SE followed by 6 digits (e.g. SE193799)");
+        return;
+      }
+    } else {
+      // Sinh viên ngoài trường: không bắt buộc MSSV, nhưng phải ghi rõ trường.
+      if (!school) { toast.error("Specify your school"); return; }
+    }
     setLoading(true);
     try {
       await register({ email, password, studentId, isFPT, school: isFPT ? undefined : school });
@@ -72,8 +80,8 @@ export default function RegisterPage() {
             <Switch checked={isFPT} onCheckedChange={setIsFPT} />
           </div>
           <div>
-            <Label htmlFor="sid">Student ID</Label>
-            <Input id="sid" required value={studentId} onChange={(e) => setStudentId(e.target.value)} className="mt-1.5" placeholder={isFPT ? "SE171234" : "Your university student ID"} />
+            <Label htmlFor="sid">{isFPT ? "Student ID (SE + 6 digits)" : "Student ID (optional)"}</Label>
+            <Input id="sid" required={isFPT} value={studentId} onChange={(e) => setStudentId(e.target.value)} className="mt-1.5" placeholder={isFPT ? "SE193799" : "Your university student ID"} />
           </div>
           {!isFPT && (
             <div>
