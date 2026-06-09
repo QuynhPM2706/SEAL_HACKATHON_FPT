@@ -8,6 +8,7 @@ import {
   useCompetitionStore, addYear, addSeason, useGlobalRules,
   type CompetitionFull, type PrizeTier, type ScoringCriterionDef, type CompetitionRound,
 } from "@/lib/competition-store";
+import { buildCreateCompetitionPayload, createCompetitionApi, updateCompetitionApi, createRoundApi, normalizeDateTime } from "@/lib/competition";
 import { buildCreateCompetitionPayload, createCompetitionApi, createRoundApi, normalizeDateTime } from "@/lib/competition";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -149,12 +150,13 @@ export default function Wizard() {
       // Ghi cuộc thi xuống BACKEND THẬT (Spring Boot + SQL Server) — POST /api/competitions.
       // CHỈ tạo MỘT lần ở đây. (Trước đây còn gọi thêm createCompetition() của store,
       // mà hàm đó nay cũng gọi POST /api/competitions → tạo trùng 2 bản ghi.)
+      // Luôn tạo ở trạng thái Draft trước (vì backend bắt buộc có >=1 round mới được Open).
       const payload = buildCreateCompetitionPayload({
         seasonId: 1,
         name: s.name,
         description: s.description,
         location: s.location,
-        status,
+        status: "Draft",
         format: s.format,
         startDate: s.startDate,
         registrationDeadline: s.registrationClose,
@@ -180,7 +182,10 @@ export default function Wizard() {
           console.error("Failed to save round", r.name, err);
         }
       }
-
+      // Nếu publish (Open): sau khi đã có round mới chuyển trạng thái sang Open.
+      if (status === "Open") {
+        await updateCompetitionApi(Number(saved.id), { status: "Open" });
+      }
       // Báo cho các trang đang nghe (dashboard / event-control) tải lại danh sách từ API.
       window.dispatchEvent(new CustomEvent("competition-store-changed"));
       clearDraft(); // lưu thành công → xóa bản nháp đang giữ

@@ -13,7 +13,7 @@ import * as React from "react";
 import { PageHeader } from "@/components/app-shell";
 import { useAuth } from "@/lib/auth";
 import { useCompetitionStore } from "@/lib/competition-store";
-import { getMyTeamsApi, getTeamsApi, type MyTeamResponse } from "@/lib/team-api";
+import { getMyTeamsApi, getTeamsApi, type MyTeamResponse, type Team } from "@/lib/team-api";
 import {
   listMentorsApi,
   sendMentorRequestApi,
@@ -230,6 +230,7 @@ function InvitePanel({
     }
     try {
       setSending(true);
+      await sendMentorRequestApi(teamId, mentor.id, note);
       await sendMentorRequestApi(teamId, mentor.id);
       toast.success(`Invitation sent to ${mentor.email ?? mentor.fullName}.`);
       setEmail("");
@@ -352,8 +353,11 @@ function MentorView({ me }: { me: Me }) {
   const [resolving, setResolving] = React.useState(true);
   const [pending, setPending] = React.useState<MentorRequest[]>([]);
   const [rooms, setRooms] = React.useState<MentorRoom[]>([]);
-  const [teamNames, setTeamNames] = React.useState<Record<number, string>>({});
+  const [teams, setTeams] = React.useState<Record<number, Team>>({});
   const [selectedRoomId, setSelectedRoomId] = React.useState<number | null>(null);
+
+  const teamName = (id: number) => teams[id]?.name ?? `Team #${id}`;
+  const teamTrack = (id: number) => teams[id]?.track ?? "";
 
   // Tìm mentorId (id bản ghi mentor) ứng với user đang đăng nhập.
   React.useEffect(() => {
@@ -366,13 +370,13 @@ function MentorView({ me }: { me: Me }) {
         .finally(() => setResolving(false));
   }, [me.id]);
 
-  // Tên team để hiển thị (room/request chỉ có teamId).
+  // Thông tin team (tên + track) để hiển thị — room/request chỉ có teamId.
   React.useEffect(() => {
     getTeamsApi()
         .then((ts) => {
-          const map: Record<number, string> = {};
-          ts.forEach((t) => { map[t.id] = t.name; });
-          setTeamNames(map);
+          const map: Record<number, Team> = {};
+          ts.forEach((t) => { map[t.id] = t; });
+          setTeams(map);
         })
         .catch(() => {});
   }, []);
@@ -400,7 +404,7 @@ function MentorView({ me }: { me: Me }) {
     try {
       await respondMentorRequestApi(req.id, decision);
       toast.success(decision === "ACCEPTED"
-          ? `Accepted — you now mentor ${teamNames[req.teamId] ?? `team #${req.teamId}`}`
+          ? `Accepted — you now mentor ${teamName(req.teamId)}`
           : "Invitation declined");
       reload();
     } catch (e) {
@@ -441,14 +445,19 @@ function MentorView({ me }: { me: Me }) {
               </div>
               <div className="divide-y">
                 {pending.map((req) => (
-                    <div key={req.id} className="px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3">
+                    <div key={req.id} className="px-5 py-4 flex flex-col sm:flex-row sm:items-start gap-3">
                       <div className="flex-1 min-w-0">
-                        <div className="font-medium">{teamNames[req.teamId] ?? `Team #${req.teamId}`}</div>
+                        <div className="font-medium">{teamName(req.teamId)}</div>
                         <div className="text-xs text-muted-foreground">
+                          {req.fromEmail ? `From ${req.fromEmail}` : ""}
+                          {req.fromEmail && req.createdAt ? " · " : ""}
                           {req.createdAt ? new Date(req.createdAt).toLocaleString() : ""}
                         </div>
+                        {req.message && (
+                            <div className="text-sm mt-1 text-muted-foreground italic">&ldquo;{req.message}&rdquo;</div>
+                        )}
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 shrink-0">
                         <Button size="sm" onClick={() => respond(req, "ACCEPTED")}>
                           <Check className="h-4 w-4 mr-1" /> Accept
                         </Button>
@@ -466,7 +475,7 @@ function MentorView({ me }: { me: Me }) {
           <div className="rounded-xl border bg-card overflow-y-auto">
             {rooms.length === 0 && (
                 <div className="p-6 text-sm text-muted-foreground text-center">
-                  No teams yet. Accept an invitation above to start mentoring.
+                  No teams assigned to you yet. Accept an invitation above to start mentoring.
                 </div>
             )}
             {rooms.map((r) => (
@@ -475,8 +484,8 @@ function MentorView({ me }: { me: Me }) {
                     onClick={() => setSelectedRoomId(r.id)}
                     className={`w-full text-left px-4 py-3 border-b text-sm ${selectedRoomId === r.id ? "bg-accent" : "hover:bg-accent/50"}`}
                 >
-                  <div className="font-medium">{teamNames[r.teamId] ?? `Team #${r.teamId}`}</div>
-                  <div className="text-xs text-muted-foreground">Room #{r.id}</div>
+                  <div className="font-medium">{teamName(r.teamId)}</div>
+                  <div className="text-xs text-muted-foreground">{teamTrack(r.teamId) || "Team"}</div>
                 </button>
             ))}
           </div>
@@ -486,7 +495,8 @@ function MentorView({ me }: { me: Me }) {
                 <ChatRoom
                     roomId={selectedRoom.id}
                     me={me}
-                    peerName={teamNames[selectedRoom.teamId] ?? `Team #${selectedRoom.teamId}`}
+                    peerName={teamName(selectedRoom.teamId)}
+                    subtitle={teamTrack(selectedRoom.teamId) || "Team"}
                     pill="Mentor"
                 />
             ) : (
@@ -500,11 +510,12 @@ function MentorView({ me }: { me: Me }) {
 
 /* ============================ SHARED CHAT ROOM ============================ */
 function ChatRoom({
-  roomId, me, peerName, pill,
+  roomId, me, peerName, subtitle, pill,
 }: {
   roomId: number;
   me: Me;
   peerName: string;
+  subtitle?: string;
   pill?: string;
 }) {
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
@@ -542,7 +553,7 @@ function ChatRoom({
         <div className="border-b px-5 py-3 flex items-center justify-between">
           <div>
             <div className="font-medium">{peerName}</div>
-            <div className="text-xs text-muted-foreground">Room #{roomId}</div>
+            <div className="text-xs text-muted-foreground">{subtitle ?? `Room #${roomId}`}</div>
           </div>
           {pill && <span className="text-xs rounded-full border px-2 py-1 text-muted-foreground">{pill}</span>}
         </div>
