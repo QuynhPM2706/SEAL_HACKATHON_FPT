@@ -7,7 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { useCompetitionStore, useGlobalRules } from "@/lib/competition-store";
 import { useJudgingStore } from "@/lib/judging-store";
 import { listMyNotifications, type BackendNotification } from "@/lib/notifications-api";
-import { createTeamApi, createTeamInviteApi } from "@/lib/team-api";
+import { createTeamApi, createTeamInviteApi, getMyTeamApi } from "@/lib/team-api";
 import { useEffectiveRole } from "@/lib/view-mode";
 import {
   Trophy,
@@ -20,6 +20,7 @@ import {
   Sparkles,
   Gavel,
   HeartHandshake,
+  Check,
 } from "lucide-react";
 import {
   Dialog,
@@ -91,6 +92,20 @@ export default function Dashboard() {
         .catch(() => setNotifications([]));
   }, []);
 
+  // Các cuộc thi mà participant đã đăng ký team — để ẩn nút "Register" và hiện "Registered".
+  const [registeredIds, setRegisteredIds] = React.useState<Set<string>>(new Set());
+
+  const refreshMyTeam = React.useCallback(() => {
+    if (user?.role !== "Participant") return;
+    getMyTeamApi()
+        .then((d) => {
+          if (d.team) setRegisteredIds(new Set([String(d.team.competitionId)]));
+        })
+        .catch(() => {/* chưa có team thì bỏ qua */});
+  }, [user?.role]);
+
+  React.useEffect(() => { refreshMyTeam(); }, [refreshMyTeam]);
+
   const isCoord = user?.role === "Coordinator" || user?.role === "Admin";
   const effectiveRole = useEffectiveRole(user?.role);
   const showMyTeams = effectiveRole === "Judge" || effectiveRole === "Mentor";
@@ -98,6 +113,16 @@ export default function Dashboard() {
   const activeCount = competitions.filter(
       (c) => c.status === "Open" || c.status === "Active" || c.status === "Scoring"
   ).length;
+
+  // Ưu tiên hiển thị: Open → Active → (Scoring) → Closed → các trạng thái còn lại.
+  const sortedCompetitions = React.useMemo(() => {
+    const order: Record<string, number> = {
+      Open: 0, Active: 1, Scoring: 2, Closed: 3, Draft: 4, Cancelled: 5,
+    };
+    return [...competitions].sort(
+        (a, b) => (order[a.status] ?? 99) - (order[b.status] ?? 99)
+    );
+  }, [competitions]);
 
   const firstName = user?.name.split(" ")[0] ?? "";
 
@@ -132,11 +157,13 @@ export default function Dashboard() {
             </div>
 
             <div className="divide-y">
-              {competitions.map((c) => (
+              {sortedCompetitions.map((c) => (
                   <CompetitionRow
                       key={c.id}
                       c={c}
                       canRegister={user?.role === "Participant"}
+                      registered={registeredIds.has(String(c.id))}
+                      onRegistered={refreshMyTeam}
                   />
               ))}
             </div>
@@ -249,9 +276,13 @@ export default function Dashboard() {
 function CompetitionRow({
                           c,
                           canRegister,
+                          registered = false,
+                          onRegistered,
                         }: {
   c: CompetitionFull;
   canRegister: boolean;
+  registered?: boolean;
+  onRegistered?: () => void;
 }) {
   const [open, setOpen] = React.useState(false);
   const [regOpen, setRegOpen] = React.useState(false);
@@ -296,6 +327,10 @@ function CompetitionRow({
             </span>
             </div>
           </div>
+
+          {canRegister && registered && (
+              <Badge className="bg-success text-success-foreground">Đã đăng ký</Badge>
+          )}
 
           <Badge variant={c.status === "Open" ? "default" : "secondary"}>
             {c.status}
@@ -431,22 +466,28 @@ function CompetitionRow({
             </div>
 
             <DialogFooter>
-              {canRegister && c.status === "Open" && (
-                  <button
-                      onClick={() => {
-                        setOpen(false);
-                        setRegOpen(true);
-                      }}
-                      className="rounded-md btn-gradient text-primary-foreground px-4 py-2 text-sm"
-                  >
-                    Register
-                  </button>
+              {canRegister && registered ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-md bg-success/15 text-success px-4 py-2 text-sm">
+                    <Check className="h-4 w-4" /> Đã đăng ký cuộc thi này
+                  </span>
+              ) : (
+                  canRegister && c.status === "Open" && (
+                      <button
+                          onClick={() => {
+                            setOpen(false);
+                            setRegOpen(true);
+                          }}
+                          className="rounded-md btn-gradient text-primary-foreground px-4 py-2 text-sm"
+                      >
+                        Register
+                      </button>
+                  )
               )}
             </DialogFooter>
           </DialogContent>
         </Dialog>
 
-        <RegisterDialog c={c} open={regOpen} onOpenChange={setRegOpen} />
+        <RegisterDialog c={c} open={regOpen} onOpenChange={setRegOpen} onRegistered={onRegistered} />
       </>
   );
 }
@@ -466,10 +507,12 @@ function RegisterDialog({
                           c,
                           open,
                           onOpenChange,
+                          onRegistered,
                         }: {
   c: CompetitionFull;
   open: boolean;
   onOpenChange: (b: boolean) => void;
+  onRegistered?: () => void;
 }) {
   const { user } = useAuth();
 
@@ -543,6 +586,7 @@ function RegisterDialog({
 
       toast.success(`Team "${name}" registered for ${c.name}.`);
 
+      onRegistered?.(); // cập nhật trạng thái "đã đăng ký" trên dashboard
       onOpenChange(false);
       setTeamName("");
       setMemberEmails("");

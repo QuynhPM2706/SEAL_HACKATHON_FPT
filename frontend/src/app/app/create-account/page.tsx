@@ -8,6 +8,8 @@ import { useRequireRole } from "@/lib/role-guard";
 import * as React from "react";
 import { PageHeader } from "@/components/app-shell";
 import { createStaffApi, type CreateStaffInput } from "@/lib/users-api";
+import { logAudit } from "@/lib/judging-store";
+import { useAuth } from "@/lib/auth";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
@@ -16,6 +18,7 @@ import { Copy } from "lucide-react";
 
 export default function CreateAccount() {
   useRequireRole(["Admin"]);
+  const { user } = useAuth();
   const [name, setName] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [role, setRole] = React.useState<CreateStaffInput["role"]>("Judge");
@@ -25,7 +28,17 @@ export default function CreateAccount() {
   const submit = async () => {
     setSaving(true);
     try {
-      await createStaffApi({ name, email, role, password: temp });
+      const created = await createStaffApi({ name, email, role, password: temp });
+      // Ghi audit log: mọi thao tác tạo tài khoản nội bộ phải để lại dấu vết, hiển thị ở trang Audit Log.
+      logAudit({
+        userId: user?.id ?? "system",
+        userName: user?.name ?? "Admin",
+        action: `Created ${role} account`,
+        entityType: "User",
+        entityId: String(created?.id ?? email),
+        oldValue: null,
+        newValue: `${name} <${email}> · ${role}`,
+      });
       toast.success(`Created ${role} account — share the temporary password: ${temp}`);
       setName(""); setEmail(""); setTemp(Math.random().toString(36).slice(2, 10));
     } catch (e) {

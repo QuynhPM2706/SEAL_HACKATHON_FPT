@@ -61,24 +61,37 @@ export default function UsersManagement() {
       {error && <div className="rounded-xl border bg-card p-6 text-sm text-destructive">Couldn't reach backend: {error}<div className="text-xs text-muted-foreground mt-1">Make sure the backend is running at http://localhost:8080.</div></div>}
 
       {!loading && !error && (
-        <div className="rounded-xl border bg-card divide-y">
-          {filtered.length === 0 && <div className="p-10 text-center text-sm text-muted-foreground">No users.</div>}
-          {filtered.map((u) => (
-            <div key={u.id} className="p-3 flex items-center gap-3">
-              <div className="h-8 w-8 rounded-full btn-gradient grid place-items-center text-xs text-primary-foreground">{u.name.slice(0,1)}</div>
-              <div className="flex-1 min-w-0">
-                <div className="font-medium text-sm truncate">{u.name}</div>
+        <div className="rounded-xl border bg-card overflow-hidden">
+          {/* Hàng tiêu đề cột */}
+          <div className="grid grid-cols-[2fr_2fr_1fr_1fr_auto] items-center gap-3 bg-muted/40 px-4 py-2.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            <span>User</span>
+            <span>Email</span>
+            <span>Role</span>
+            <span>Status</span>
+            <span className="text-right">Action</span>
+          </div>
+
+          <div className="divide-y">
+            {filtered.length === 0 && <div className="p-10 text-center text-sm text-muted-foreground">No users.</div>}
+            {filtered.map((u) => (
+              <div key={u.id} className="grid grid-cols-[2fr_2fr_1fr_1fr_auto] items-center gap-3 px-4 py-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="h-8 w-8 shrink-0 rounded-full btn-gradient grid place-items-center text-xs text-primary-foreground">{u.name.slice(0,1)}</div>
+                  <div className="font-medium text-sm truncate">{u.name}</div>
+                </div>
                 <div className="text-xs text-muted-foreground truncate">{u.email}</div>
+                <div><Badge variant="outline">{u.role}</Badge></div>
+                <div><Badge variant={u.status === "active" ? "default" : u.status === "pending" ? "secondary" : "destructive"}>{u.status}</Badge></div>
+                <div className="text-right">
+                  {u.status === "active" ? (
+                    <button onClick={() => void changeStatus(u.id, "suspended")} className="text-xs text-destructive">Suspend</button>
+                  ) : (
+                    <button onClick={() => void changeStatus(u.id, "active")} className="text-xs text-success">Reactivate</button>
+                  )}
+                </div>
               </div>
-              <Badge variant="outline">{u.role}</Badge>
-              <Badge variant={u.status === "active" ? "default" : u.status === "pending" ? "secondary" : "destructive"}>{u.status}</Badge>
-              {u.status === "active" ? (
-                <button onClick={() => void changeStatus(u.id, "suspended")} className="text-xs text-destructive">Suspend</button>
-              ) : (
-                <button onClick={() => void changeStatus(u.id, "active")} className="text-xs text-success">Reactivate</button>
-              )}
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
     </div>

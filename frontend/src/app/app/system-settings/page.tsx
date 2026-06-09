@@ -5,6 +5,7 @@ import * as React from "react";
 import { PageHeader } from "@/components/app-shell";
 import { useAuth } from "@/lib/auth";
 import { useGlobalRules, setGlobalRules, type GlobalRule } from "@/lib/competition-store";
+import { logAudit } from "@/lib/judging-store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
@@ -50,6 +51,16 @@ export default function SystemSettings() {
       return;
     }
     const next = setGlobalRules(draft, { id: user.id, name: user.name });
+    // Ghi audit log cho mỗi lần đổi bộ luật toàn hệ thống (đúng như ghi chú trên trang).
+    logAudit({
+      userId: user.id,
+      userName: user.name,
+      action: "Updated global competition rules",
+      entityType: "Rules",
+      entityId: `rules-v${next.version}`,
+      oldValue: `v${meta.version}`,
+      newValue: `v${next.version} · ${next.rules.filter((r) => r.active).length} active rules`,
+    });
     toast.success(`Rules updated — version v${next.version}`);
   };
   const onDiscard = () => setDraft(meta.rules);
