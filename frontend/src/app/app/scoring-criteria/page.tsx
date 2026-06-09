@@ -17,14 +17,25 @@ export default function Criteria() {
   const [name, setName] = React.useState("");
   const [weight, setWeight] = React.useState(0.2);
   const filtered = criteria.filter((c) => c.roundId === roundId);
+  const totalWeight = filtered.reduce((sum, c) => sum + c.weight, 0);
+  const weightOk = Math.abs(totalWeight - 1) < 0.001;
 
   return (
     <div>
       <PageHeader title="Scoring criteria" subtitle="Scale 0–10 · weights sum to 1.0" />
-      <Select value={roundId} onValueChange={setRoundId}>
-        <SelectTrigger className="w-48 mb-4"><SelectValue /></SelectTrigger>
-        <SelectContent>{rounds.map((r) => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
-      </Select>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <Select value={roundId} onValueChange={setRoundId}>
+          <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+          <SelectContent>{rounds.map((r) => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
+        </Select>
+        <div className="text-sm">
+          Total weight:{" "}
+          <span className={weightOk ? "text-success font-medium" : "text-warning font-medium"}>
+            {(totalWeight * 100).toFixed(0)}%
+          </span>
+          {!weightOk && <span className="text-xs text-muted-foreground ml-2">(should be 100%)</span>}
+        </div>
+      </div>
       <div className="rounded-xl border bg-card divide-y">
         {filtered.map((c) => (
           <div key={c.id} className="p-3 flex items-center gap-3">
