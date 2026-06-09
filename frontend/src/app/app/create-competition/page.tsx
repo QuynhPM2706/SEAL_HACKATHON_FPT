@@ -8,7 +8,7 @@ import {
   useCompetitionStore, addYear, addSeason, useGlobalRules,
   type CompetitionFull, type PrizeTier, type ScoringCriterionDef, type CompetitionRound,
 } from "@/lib/competition-store";
-import { buildCreateCompetitionPayload, createCompetitionApi } from "@/lib/competition";
+import { buildCreateCompetitionPayload, createCompetitionApi, updateCompetitionApi, createRoundApi, normalizeDateTime } from "@/lib/competition";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -149,17 +149,43 @@ export default function Wizard() {
       // Ghi cuộc thi xuống BACKEND THẬT (Spring Boot + SQL Server) — POST /api/competitions.
       // CHỈ tạo MỘT lần ở đây. (Trước đây còn gọi thêm createCompetition() của store,
       // mà hàm đó nay cũng gọi POST /api/competitions → tạo trùng 2 bản ghi.)
+      // Luôn tạo ở trạng thái Draft trước (vì backend bắt buộc có >=1 round mới được Open).
       const payload = buildCreateCompetitionPayload({
         seasonId: 1,
         name: s.name,
         description: s.description,
         location: s.location,
-        status,
+        status: "Draft",
         format: s.format,
         startDate: s.startDate,
         registrationDeadline: s.registrationClose,
       });
       const saved = await createCompetitionApi(payload);
+
+      // Lưu các VÒNG xuống backend thật (POST /api/competitions/{id}/rounds).
+      // Chỉ lưu vòng có tên; ngày để startAt + deadline = thời điểm đã chọn ở wizard.
+      const namedRounds = s.rounds.filter((r) => r.name.trim());
+      for (let i = 0; i < namedRounds.length; i++) {
+        const r = namedRounds[i];
+        const at = normalizeDateTime(r.start) ?? null;
+        try {
+          await createRoundApi(Number(saved.id), {
+            name: r.name.trim(),
+            sequence: i + 1,
+            startAt: at,
+            deadline: at,
+            question: r.question?.trim() || null,
+            guidelines: r.guidelines?.trim() || null,
+          });
+        } catch (err) {
+          console.error("Failed to save round", r.name, err);
+        }
+      }
+
+      // Nếu publish (Open): sau khi đã có round mới chuyển trạng thái sang Open.
+      if (status === "Open") {
+        await updateCompetitionApi(Number(saved.id), { status: "Open" });
+      }
 
       // Báo cho các trang đang nghe (dashboard / event-control) tải lại danh sách từ API.
       window.dispatchEvent(new CustomEvent("competition-store-changed"));
