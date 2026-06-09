@@ -54,7 +54,7 @@ export default function AuditLog() {
             <Input placeholder="Search action, actor, team…" value={q} onChange={(e) => setQ(e.target.value)} className="max-w-md" />
             <Select value={type} onValueChange={setType}>
               <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
-              <SelectContent>{["all","Score","Criteria","Assignment","Ranking","Round","Competition","User"].map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+              <SelectContent>{["all","Score","Criteria","Assignment","Ranking","Round","Competition","User","Rules"].map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
             </Select>
           </div>
 

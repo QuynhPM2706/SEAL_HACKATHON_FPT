@@ -5,7 +5,7 @@ import * as React from "react";
 import { PageHeader } from "@/components/app-shell";
 import { useAuth } from "@/lib/auth";
 import {
-  useCompetitionStore, addYear, addSeason, useGlobalRules, createCompetition,
+  useCompetitionStore, addYear, addSeason, useGlobalRules,
   type CompetitionFull, type PrizeTier, type ScoringCriterionDef, type CompetitionRound,
 } from "@/lib/competition-store";
 import { buildCreateCompetitionPayload, createCompetitionApi } from "@/lib/competition";
@@ -23,6 +23,9 @@ const STEPS = ["Year & Season", "Basic Info", "Timeline & Rounds", "Rules & Team
 interface State extends Omit<CompetitionFull, "id" | "createdAt" | "createdBy"> {}
 
 function uid() { return Math.random().toString(36).slice(2, 8); }
+
+// Khóa localStorage để giữ bản nháp wizard khi user rời sang tab/trang khác rồi quay lại.
+const DRAFT_KEY = "seal_create_competition_draft";
 
 export default function Wizard() {
   useRequireRole(["Coordinator", "Admin"]); // thay cho beforeLoad
@@ -61,6 +64,55 @@ export default function Wizard() {
 
   const update = <K extends keyof State>(k: K, v: State[K]) => setS((p) => ({ ...p, [k]: v }));
 
+  // ---- Giữ bản nháp khi rời trang (yêu cầu: out ra tab khác phải giữ thông tin đang điền) ----
+  const [hydrated, setHydrated] = React.useState(false);
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (raw) {
+        const d = JSON.parse(raw) as { s?: State; step?: number };
+        if (d.s) setS(d.s);
+        if (typeof d.step === "number") setStep(d.step);
+      }
+    } catch { /* nháp hỏng thì bỏ qua */ }
+    setHydrated(true);
+  }, []);
+  React.useEffect(() => {
+    if (!hydrated) return; // tránh ghi đè bằng state mặc định trước khi nạp xong bản nháp
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ s, step })); } catch { /* hết chỗ thì bỏ qua */ }
+  }, [s, step, hydrated]);
+
+  const clearDraft = () => {
+    try { localStorage.removeItem(DRAFT_KEY); } catch { /* noop */ }
+  };
+
+  // Validate riêng từng bước — dùng để chặn nút "Next" và bắt buộc nhập thông tin cần thiết.
+  const validateStep = (i: number): string | null => {
+    switch (i) {
+      case 1: // Basic Info — các trường bắt buộc
+        if (!s.name.trim()) return "Competition name is required.";
+        if (!s.description.trim()) return "Description is required.";
+        if (!s.location.trim()) return "Location is required.";
+        return null;
+      case 2: // Timeline & Rounds
+        return validateTimeline();
+      case 5: { // Scoring — tổng trọng số phải = 100%
+        if (s.scoring.some((c) => !c.name.trim())) return "Every scoring criterion needs a name.";
+        const total = s.scoring.reduce((a, c) => a + c.weightPct, 0);
+        if (total !== 100) return `Scoring weights must total 100% (currently ${total}%). Use "Rebalance" in this step.`;
+        return null;
+      }
+      default:
+        return null;
+    }
+  };
+
+  const goNext = () => {
+    const err = validateStep(step);
+    if (err) { toast.error(err); return; }
+    setStep(step + 1);
+  };
+
   const validateTimeline = (): string | null => {
     if (!s.startDate) return "Start date is required.";
     if (!s.registrationOpen || !s.registrationClose) return "Registration window is required.";
@@ -82,16 +134,20 @@ export default function Wizard() {
 
   const publish = async (status: "Draft" | "Open") => {
     if (!user) return;
-    if (status === "Open") {
-      const err = validateTimeline();
-      if (err) { toast.error(err); return; }
-      const total = s.scoring.reduce((a, c) => a + c.weightPct, 0);
-      if (total !== 100) { toast.error(`Scoring weights must total 100% (currently ${total}%). Use "Rebalance" in step 6.`); return; }
+    // Nháp: tối thiểu phải có tên. Publish (Open): bắt buộc đủ thông tin cần thiết.
+    if (status === "Draft") {
+      if (!s.name.trim()) { toast.error("Competition name is required to save a draft."); return; }
+    } else {
+      for (const i of [1, 2, 5]) {
+        const err = validateStep(i);
+        if (err) { toast.error(err); setStep(i); return; }
+      }
     }
     setSaving(true);
     try {
-      // 1) Ghi các trường lõi (name/description/status/format/startDate) xuống
-      //    BACKEND THẬT (Spring Boot + SQL Server) — POST /api/competitions.
+      // Ghi cuộc thi xuống BACKEND THẬT (Spring Boot + SQL Server) — POST /api/competitions.
+      // CHỈ tạo MỘT lần ở đây. (Trước đây còn gọi thêm createCompetition() của store,
+      // mà hàm đó nay cũng gọi POST /api/competitions → tạo trùng 2 bản ghi.)
       const payload = buildCreateCompetitionPayload({
         seasonId: 1,
         name: s.name,
@@ -99,13 +155,13 @@ export default function Wizard() {
         status,
         format: s.format,
         startDate: s.startDate,
+        registrationDeadline: s.registrationClose,
       });
       const saved = await createCompetitionApi(payload);
 
-      // 2) Backend chưa có cột cho rounds/prizes/scoring/guests... nên giữ đầy đủ
-      //    dữ liệu ở local store để các trang khác vẫn chạy, gắn backendId để biết
-      //    cuộc thi đã được lưu trên server.
-      createCompetition({ ...s, status, createdBy: user.id, backendId: saved.id });
+      // Báo cho các trang đang nghe (dashboard / event-control) tải lại danh sách từ API.
+      window.dispatchEvent(new CustomEvent("competition-store-changed"));
+      clearDraft(); // lưu thành công → xóa bản nháp đang giữ
       toast.success(`Saved to backend (id #${saved.id}) — ${status === "Open" ? "published" : "draft"}.`);
 
       router.push("/app/event-control");
@@ -119,6 +175,18 @@ export default function Wizard() {
   return (
     <div>
       <PageHeader title="Create competition" subtitle="7-step wizard · BR-aware validation" />
+
+      <div className="mb-3 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5">
+          <Check className="h-3.5 w-3.5 text-success" /> Draft auto-saved — you can leave and come back.
+        </span>
+        <button
+          onClick={() => { clearDraft(); window.location.reload(); }}
+          className="text-muted-foreground hover:text-destructive underline-offset-2 hover:underline"
+        >
+          Clear draft
+        </button>
+      </div>
 
       <div className="mb-6 flex items-center gap-2 overflow-x-auto">
         {STEPS.map((label, i) => (
@@ -145,7 +213,7 @@ export default function Wizard() {
           <ChevronLeft className="h-4 w-4" /> Back
         </button>
         {step < STEPS.length - 1 && (
-          <button onClick={() => setStep(step + 1)} className="rounded-md btn-gradient text-primary-foreground px-4 py-2 text-sm inline-flex items-center gap-1">
+          <button onClick={goNext} className="rounded-md btn-gradient text-primary-foreground px-4 py-2 text-sm inline-flex items-center gap-1">
             Next <ChevronRight className="h-4 w-4" />
           </button>
         )}
@@ -187,12 +255,13 @@ function YearSeasonStep({ s, update, years, seasons }: any) {
 function BasicStep({ s, update }: any) {
   return (
     <div className="space-y-4">
-      <div><Label>Name</Label><Input value={s.name} onChange={(e) => update("name", e.target.value)} className="mt-1.5" /></div>
-      <div><Label>Description</Label><Textarea value={s.description} onChange={(e) => update("description", e.target.value)} className="mt-1.5" rows={3} /></div>
+      <div><Label>Name <span className="text-destructive">*</span></Label><Input value={s.name} onChange={(e) => update("name", e.target.value)} className="mt-1.5" placeholder="e.g. SEAL Hackathon 2026" /></div>
+      <div><Label>Description <span className="text-destructive">*</span></Label><Textarea value={s.description} onChange={(e) => update("description", e.target.value)} className="mt-1.5" rows={3} placeholder="What is this competition about?" /></div>
       <div className="grid sm:grid-cols-2 gap-3">
-        <div><Label>Location</Label><Input value={s.location} onChange={(e) => update("location", e.target.value)} className="mt-1.5" placeholder="FPT University Hòa Lạc" /></div>
+        <div><Label>Location <span className="text-destructive">*</span></Label><Input value={s.location} onChange={(e) => update("location", e.target.value)} className="mt-1.5" placeholder="FPT University Hòa Lạc" /></div>
         <div><Label>Format</Label><Input value="Offline" disabled className="mt-1.5" /></div>
       </div>
+      <p className="text-xs text-muted-foreground">Fields marked <span className="text-destructive">*</span> are required before you can continue.</p>
     </div>
   );
 }
@@ -205,7 +274,7 @@ function TimelineStep({ s, update }: any) {
   return (
     <div className="space-y-4">
       <div className="grid sm:grid-cols-3 gap-3">
-        <div><Label>Start date</Label><Input type="datetime-local" value={s.startDate} onChange={(e) => update("startDate", e.target.value)} className="mt-1.5" /></div>
+        <div><Label>Start date <span className="text-destructive">*</span></Label><Input type="datetime-local" value={s.startDate} onChange={(e) => update("startDate", e.target.value)} className="mt-1.5" /></div>
         <div><Label>Duration</Label>
           <Select value={String(s.durationDays)} onValueChange={(v) => update("durationDays", Number(v))}>
             <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
@@ -215,16 +284,16 @@ function TimelineStep({ s, update }: any) {
       </div>
       <div className="grid sm:grid-cols-2 gap-3">
         <div>
-          <Label>Registration opens</Label>
+          <Label>Registration opens <span className="text-destructive">*</span></Label>
           <Input type="datetime-local" max={s.startDate || undefined} value={s.registrationOpen} onChange={(e) => update("registrationOpen", e.target.value)} className="mt-1.5" />
         </div>
         <div>
-          <Label>Registration closes</Label>
+          <Label>Registration closes <span className="text-destructive">*</span></Label>
           <Input type="datetime-local" min={s.registrationOpen || undefined} max={s.startDate || undefined} value={s.registrationClose} onChange={(e) => update("registrationClose", e.target.value)} className="mt-1.5" />
         </div>
       </div>
       {s.registrationOpen && s.registrationClose && (!regOpenOk || !regBeforeStart) && (
-        <p className="text-xs text-warning">Registration window must be before the competition start date.</p>
+        <p className="text-xs text-warning">Registration must close before the competition start date (and after it opens).</p>
       )}
       <div>
         <div className="flex items-center justify-between mb-2">
