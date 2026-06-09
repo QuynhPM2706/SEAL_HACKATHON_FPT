@@ -28,6 +28,8 @@ export interface MentorRequest {
   teamId: number;
   mentorId: number;
   status: "PENDING" | "ACCEPTED" | "DENIED";
+  message?: string | null;   // lời nhắn của team khi mời
+  fromEmail?: string | null; // email người gửi (leader)
   createdAt?: string;
   updatedAt?: string;
 }
@@ -52,8 +54,11 @@ export interface ChatMessage {
 export const listMentorsApi = () => apiGet<Mentor[]>("/api/mentors");
 
 // --- Mời / duyệt ---
-export const sendMentorRequestApi = (teamId: number, mentorId: number) =>
-  apiPost<MentorRequest>(`/api/mentor-chat/request/send?teamId=${teamId}&mentorId=${mentorId}`);
+export const sendMentorRequestApi = (teamId: number, mentorId: number, message?: string) =>
+  apiPost<MentorRequest>(
+    `/api/mentor-chat/request/send?teamId=${teamId}&mentorId=${mentorId}` +
+      (message && message.trim() ? `&message=${encodeURIComponent(message.trim())}` : ""),
+  );
 
 export const getPendingRequestsApi = (mentorId: number) =>
   apiGet<MentorRequest[]>(`/api/mentor-chat/requests/pending?mentorId=${mentorId}`);
