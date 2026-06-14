@@ -9,7 +9,6 @@ import {
   type CompetitionFull, type PrizeTier, type ScoringCriterionDef, type CompetitionRound,
 } from "@/lib/competition-store";
 import { buildCreateCompetitionPayload, createCompetitionApi, updateCompetitionApi, createRoundApi, normalizeDateTime } from "@/lib/competition";
-import { buildCreateCompetitionPayload, createCompetitionApi, createRoundApi, normalizeDateTime } from "@/lib/competition";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";

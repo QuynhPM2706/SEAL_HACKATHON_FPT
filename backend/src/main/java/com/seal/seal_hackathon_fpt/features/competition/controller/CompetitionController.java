@@ -1,7 +1,5 @@
 package com.seal.seal_hackathon_fpt.features.competition.controller;
 
-// [SỬA ĐỔI - Tính năng: Xây dựng API Competition với DTO]
-// Đã thêm: Toàn bộ nội dung Controller sử dụng chuẩn RESTful và DTO
 import com.seal.seal_hackathon_fpt.features.competition.dto.CreateCompetitionRequest;
 import com.seal.seal_hackathon_fpt.features.competition.dto.RoundRequest;
 import com.seal.seal_hackathon_fpt.features.competition.dto.UpdateCompetitionRequest;
@@ -36,19 +34,16 @@ public class CompetitionController {
         return ResponseEntity.ok(competitionService.getById(id));
     }
 
-    // Liệt kê các vòng của cuộc thi — dùng cho "Past participation" để tính rank & điểm từng vòng.
     @GetMapping("/{id}/rounds")
     public ResponseEntity<List<Round>> getRounds(@PathVariable Long id) {
         return ResponseEntity.ok(competitionService.getRounds(id));
     }
 
-    // Coordinator/Admin: tạo vòng mới cho cuộc thi.
     @PostMapping("/{id}/rounds")
     public ResponseEntity<Round> addRound(@PathVariable Long id, @RequestBody RoundRequest request) {
         return ResponseEntity.ok(competitionService.addRound(id, request));
     }
 
-    // Cập nhật một vòng.
     @PutMapping("/{id}/rounds/{roundId}")
     public ResponseEntity<Round> updateRound(
             @PathVariable Long id,
@@ -57,7 +52,6 @@ public class CompetitionController {
         return ResponseEntity.ok(competitionService.updateRound(roundId, request));
     }
 
-    // Xoá một vòng.
     @DeleteMapping("/{id}/rounds/{roundId}")
     public ResponseEntity<String> deleteRound(@PathVariable Long id, @PathVariable Long roundId) {
         competitionService.deleteRound(roundId);
