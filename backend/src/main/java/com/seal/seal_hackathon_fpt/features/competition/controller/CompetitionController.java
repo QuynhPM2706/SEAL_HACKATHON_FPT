@@ -1,13 +1,10 @@
 package com.seal.seal_hackathon_fpt.features.competition.controller;
 
 import com.seal.seal_hackathon_fpt.features.competition.dto.CreateCompetitionRequest;
-import com.seal.seal_hackathon_fpt.features.competition.dto.RoundRequest;
 import com.seal.seal_hackathon_fpt.features.competition.dto.UpdateCompetitionRequest;
 import com.seal.seal_hackathon_fpt.features.competition.entity.Competition;
-import com.seal.seal_hackathon_fpt.features.competition.entity.Round;
 import com.seal.seal_hackathon_fpt.features.competition.service.CompetitionService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -20,54 +17,27 @@ public class CompetitionController {
     private final CompetitionService competitionService;
 
     @PostMapping
-    public ResponseEntity<Competition> create(@RequestBody CreateCompetitionRequest request) {
-        return ResponseEntity.ok(competitionService.create(request));
+    public Competition create(@RequestBody CreateCompetitionRequest request) {
+        return competitionService.create(request);
     }
 
     @GetMapping
-    public ResponseEntity<List<Competition>> getAll() {
-        return ResponseEntity.ok(competitionService.getAll());
+    public List<Competition> getAll() {
+        return competitionService.getAll();
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Competition> getById(@PathVariable Long id) {
-        return ResponseEntity.ok(competitionService.getById(id));
-    }
-
-    @GetMapping("/{id}/rounds")
-    public ResponseEntity<List<Round>> getRounds(@PathVariable Long id) {
-        return ResponseEntity.ok(competitionService.getRounds(id));
-    }
-
-    @PostMapping("/{id}/rounds")
-    public ResponseEntity<Round> addRound(@PathVariable Long id, @RequestBody RoundRequest request) {
-        return ResponseEntity.ok(competitionService.addRound(id, request));
-    }
-
-    @PutMapping("/{id}/rounds/{roundId}")
-    public ResponseEntity<Round> updateRound(
-            @PathVariable Long id,
-            @PathVariable Long roundId,
-            @RequestBody RoundRequest request) {
-        return ResponseEntity.ok(competitionService.updateRound(roundId, request));
-    }
-
-    @DeleteMapping("/{id}/rounds/{roundId}")
-    public ResponseEntity<String> deleteRound(@PathVariable Long id, @PathVariable Long roundId) {
-        competitionService.deleteRound(roundId);
-        return ResponseEntity.ok("Round deleted");
+    public Competition getById(@PathVariable Long id) {
+        return competitionService.getById(id);
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<Competition> update(
-            @PathVariable Long id,
-            @RequestBody UpdateCompetitionRequest request) {
-        return ResponseEntity.ok(competitionService.update(id, request));
+    public Competition update(@PathVariable Long id, @RequestBody UpdateCompetitionRequest request) {
+        return competitionService.update(id, request);
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<String> delete(@PathVariable Long id) {
+    public void delete(@PathVariable Long id) {
         competitionService.delete(id);
-        return ResponseEntity.ok("Deleted successfully");
     }
 }

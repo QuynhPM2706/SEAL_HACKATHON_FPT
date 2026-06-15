@@ -1,8 +1,8 @@
 package com.seal.seal_hackathon_fpt.features.competition.entity;
 
-import com.seal.seal_hackathon_fpt.features.competition.dto.UpdateCompetitionRequest;
 import jakarta.persistence.*;
 import lombok.*;
+
 import java.time.LocalDateTime;
 
 @Entity
@@ -25,22 +25,41 @@ public class Competition {
 
     private String description;
 
-    @Column(name = "location")
+    private String category;
+
     private String location;
-
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    private Status status;
-
-    @Column(name = "start_date")
-    private LocalDateTime startDate;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Format format;
 
-    public void getRegistrationDeadline(UpdateCompetitionRequest request) {
-    }
+    @Column(name = "start_date")
+    private LocalDateTime startDate;
+
+    @Column(name = "duration_days")
+    private Integer durationDays;
+
+    @Column(name = "registration_deadline")
+    private LocalDateTime registrationDeadline;
+
+    @Column(name = "min_teams")
+    private Integer minTeams;
+
+    @Column(name = "min_members")
+    private Integer minMembers;
+
+    @Column(name = "max_members")
+    private Integer maxMembers;
+
+    @Column(name = "score_scale")
+    private Integer scoreScale;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private Status status;
+
+    @Column(name = "ranking_published")
+    private Boolean rankingPublished;
 
     public enum Format {
         Offline,
@@ -56,8 +75,4 @@ public class Competition {
         Closed,
         Cancelled
     }
-
-    @Column(name = "registration_deadline")
-    private LocalDateTime registrationDeadline;
 }
-

@@ -1,28 +1,31 @@
 package com.seal.seal_hackathon_fpt.features.competition.dto;
 
 import com.seal.seal_hackathon_fpt.features.competition.entity.Competition;
+import lombok.Builder;
 import lombok.Data;
 
 import java.time.LocalDateTime;
 
 @Data
-public class CreateCompetitionRequest {
-    private Long seasonId;
+@Builder
+public class PublicCompetitionResponse {
+    private Long id;
     private String name;
     private String description;
     private String category;
     private String location;
 
     private Competition.Format format;
+    private Competition.Status status;
+
     private LocalDateTime startDate;
     private Integer durationDays;
+
+    // Không lưu DB, backend tự tính từ startDate + durationDays
+    private LocalDateTime endDate;
+
     private LocalDateTime registrationDeadline;
 
-    private Integer minTeams;
-    private Integer minMembers;
-    private Integer maxMembers;
-    private Integer scoreScale;
-
-    private Competition.Status status;
-    private Boolean rankingPublished;
+    // Chỉ có 2 giá trị: Open / Closed
+    private String registrationStatus;
 }

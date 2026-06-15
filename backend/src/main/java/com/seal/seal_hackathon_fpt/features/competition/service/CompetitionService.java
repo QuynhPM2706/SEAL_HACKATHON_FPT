@@ -1,99 +1,115 @@
 package com.seal.seal_hackathon_fpt.features.competition.service;
 
-// [SỬA ĐỔI - Tính năng: Tối ưu CRUD Competition bằng DTO]
-// Đã thêm: Import các class DTO
 import com.seal.seal_hackathon_fpt.features.competition.dto.CreateCompetitionRequest;
-import com.seal.seal_hackathon_fpt.features.competition.dto.RoundRequest;
+import com.seal.seal_hackathon_fpt.features.competition.dto.PublicCompetitionResponse;
 import com.seal.seal_hackathon_fpt.features.competition.dto.UpdateCompetitionRequest;
 import com.seal.seal_hackathon_fpt.features.competition.entity.Competition;
-import com.seal.seal_hackathon_fpt.features.competition.entity.Round;
 import com.seal.seal_hackathon_fpt.features.competition.repository.CompetitionRepository;
-import com.seal.seal_hackathon_fpt.features.competition.repository.RoundRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
-import java.util.Comparator;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
 @RequiredArgsConstructor
 public class CompetitionService {
-    private final CompetitionRepository competitionRepository;
-    private final RoundRepository roundRepository;
 
-    /** Các vòng của một cuộc thi, sắp theo sequence tăng dần (vòng cuối = sequence lớn nhất). */
-    public List<Round> getRounds(Long competitionId) {
-        List<Round> rounds = roundRepository.findByCompetitionId(competitionId);
-        rounds.sort(Comparator.comparing(
-                r -> r.getSequence() == null ? Integer.MAX_VALUE : r.getSequence()));
-        return rounds;
+    private final CompetitionRepository competitionRepository;
+
+    // =========================
+    // PUBLIC API - GUEST DASHBOARD
+    // =========================
+
+    public List<PublicCompetitionResponse> getPublicCompetitions() {
+        return competitionRepository.findAll()
+                .stream()
+                .filter(this::isPublicVisible)
+                .map(this::toPublicResponse)
+                .toList();
     }
 
-    /** Tạo một vòng mới cho cuộc thi. sequence null → tự đánh số tiếp theo. */
-    public Round addRound(Long competitionId, RoundRequest req) {
-        // Đảm bảo cuộc thi tồn tại.
-        getById(competitionId);
+    public PublicCompetitionResponse getPublicCompetitionById(Long id) {
+        Competition competition = getById(id);
 
-        Integer sequence = req.getSequence();
-        if (sequence == null) {
-            sequence = roundRepository.findByCompetitionId(competitionId).stream()
-                    .map(Round::getSequence)
-                    .filter(java.util.Objects::nonNull)
-                    .max(Integer::compareTo)
-                    .map(m -> m + 1)
-                    .orElse(1);
+        if (!isPublicVisible(competition)) {
+            throw new RuntimeException("Competition is not public");
         }
 
-        Round round = Round.builder()
-                .competitionId(competitionId)
-                .name(req.getName())
-                .sequence(sequence)
-                .startAt(req.getStartAt())
-                .deadline(req.getDeadline())
-                .question(req.getQuestion())
-                .guidelines(req.getGuidelines())
-                .isLocked(Boolean.TRUE.equals(req.getIsLocked()))
+        return toPublicResponse(competition);
+    }
+
+    private boolean isPublicVisible(Competition competition) {
+        return competition.getStatus() != Competition.Status.Draft
+                && competition.getStatus() != Competition.Status.Cancelled;
+    }
+
+    private PublicCompetitionResponse toPublicResponse(Competition competition) {
+        return PublicCompetitionResponse.builder()
+                .id(competition.getId())
+                .name(competition.getName())
+                .description(competition.getDescription())
+                .category(competition.getCategory())
+                .location(competition.getLocation())
+                .format(competition.getFormat())
+                .status(competition.getStatus())
+                .startDate(competition.getStartDate())
+                .durationDays(competition.getDurationDays())
+                .endDate(calculateEndDate(competition))
+                .registrationDeadline(competition.getRegistrationDeadline())
+                .registrationStatus(getRegistrationStatus(competition))
                 .build();
-
-        return roundRepository.save(round);
     }
 
-    /** Cập nhật một vòng (chỉ set các field được gửi lên). */
-    public Round updateRound(Long roundId, RoundRequest req) {
-        Round round = roundRepository.findById(roundId)
-                .orElseThrow(() -> new RuntimeException("Round not found"));
+    private LocalDateTime calculateEndDate(Competition competition) {
+        if (competition.getStartDate() == null || competition.getDurationDays() == null) {
+            return null;
+        }
 
-        if (req.getName() != null) round.setName(req.getName());
-        if (req.getSequence() != null) round.setSequence(req.getSequence());
-        if (req.getStartAt() != null) round.setStartAt(req.getStartAt());
-        if (req.getDeadline() != null) round.setDeadline(req.getDeadline());
-        if (req.getQuestion() != null) round.setQuestion(req.getQuestion());
-        if (req.getGuidelines() != null) round.setGuidelines(req.getGuidelines());
-        if (req.getIsLocked() != null) round.setIsLocked(req.getIsLocked());
-
-        return roundRepository.save(round);
+        int daysToAdd = Math.max(competition.getDurationDays() - 1, 0);
+        return competition.getStartDate().plusDays(daysToAdd);
     }
 
-    /** Xoá một vòng. */
-    public void deleteRound(Long roundId) {
-        roundRepository.deleteById(roundId);
+    private String getRegistrationStatus(Competition competition) {
+        if (competition.getStatus() != Competition.Status.Open) {
+            return "Closed";
+        }
+
+        if (competition.getRegistrationDeadline() == null) {
+            return "Open";
+        }
+
+        if (LocalDateTime.now().isAfter(competition.getRegistrationDeadline())) {
+            return "Closed";
+        }
+
+        return "Open";
     }
 
-    // [SỬA ĐỔI - Tính năng: Tạo cuộc thi]
-    // Đã xóa: Tham số truyền vào là Entity (Competition comp)
-    // Đã thêm: Tham số truyền vào là DTO (CreateCompetitionRequest)
+    // =========================
+    // ADMIN / COORDINATOR CRUD
+    // =========================
+
     public Competition create(CreateCompetitionRequest request) {
-        Competition comp = Competition.builder()
+        Competition competition = Competition.builder()
                 .seasonId(request.getSeasonId())
                 .name(request.getName())
                 .description(request.getDescription())
+                .category(request.getCategory())
                 .location(request.getLocation())
-                .status(request.getStatus())
-                .format(request.getFormat())
+                .format(request.getFormat() != null ? request.getFormat() : Competition.Format.Offline)
                 .startDate(request.getStartDate())
+                .durationDays(request.getDurationDays())
                 .registrationDeadline(request.getRegistrationDeadline())
+                .minTeams(request.getMinTeams())
+                .minMembers(request.getMinMembers())
+                .maxMembers(request.getMaxMembers())
+                .scoreScale(request.getScoreScale() != null ? request.getScoreScale() : 100)
+                .status(request.getStatus() != null ? request.getStatus() : Competition.Status.Draft)
+                .rankingPublished(request.getRankingPublished() != null ? request.getRankingPublished() : false)
                 .build();
-        return competitionRepository.save(comp);
+
+        return competitionRepository.save(competition);
     }
 
     public List<Competition> getAll() {
@@ -105,15 +121,12 @@ public class CompetitionService {
                 .orElseThrow(() -> new RuntimeException("Competition not found"));
     }
 
-    public void delete(Long id) {
-        competitionRepository.deleteById(id);
-    }
-
-    // [SỬA ĐỔI - Tính năng: Cập nhật cuộc thi]
-    // Đã xóa: Tham số truyền vào là Entity
-    // Đã thêm: Tham số truyền vào là DTO (UpdateCompetitionRequest)
     public Competition update(Long id, UpdateCompetitionRequest request) {
         Competition existing = getById(id);
+
+        if (request.getSeasonId() != null) {
+            existing.setSeasonId(request.getSeasonId());
+        }
 
         if (request.getName() != null) {
             existing.setName(request.getName());
@@ -123,33 +136,59 @@ public class CompetitionService {
             existing.setDescription(request.getDescription());
         }
 
+        if (request.getCategory() != null) {
+            existing.setCategory(request.getCategory());
+        }
+
         if (request.getLocation() != null) {
             existing.setLocation(request.getLocation());
         }
 
-        if (request.getStatus() != null) {
-            // Một cuộc thi phải có >= 1 vòng trước khi mở đăng ký (Open).
-            if (request.getStatus() == Competition.Status.Open
-                    && roundRepository.findByCompetitionId(id).isEmpty()) {
-                throw new RuntimeException("Add at least one round before opening this competition.");
-            }
-            existing.setStatus(request.getStatus());
-        }
-
         if (request.getFormat() != null) {
             existing.setFormat(request.getFormat());
-        } else if (existing.getFormat() == null) {
-            existing.setFormat(Competition.Format.Offline);
         }
 
         if (request.getStartDate() != null) {
             existing.setStartDate(request.getStartDate());
         }
 
+        if (request.getDurationDays() != null) {
+            existing.setDurationDays(request.getDurationDays());
+        }
+
         if (request.getRegistrationDeadline() != null) {
             existing.setRegistrationDeadline(request.getRegistrationDeadline());
         }
 
+        if (request.getMinTeams() != null) {
+            existing.setMinTeams(request.getMinTeams());
+        }
+
+        if (request.getMinMembers() != null) {
+            existing.setMinMembers(request.getMinMembers());
+        }
+
+        if (request.getMaxMembers() != null) {
+            existing.setMaxMembers(request.getMaxMembers());
+        }
+
+        if (request.getScoreScale() != null) {
+            existing.setScoreScale(request.getScoreScale());
+        }
+
+        if (request.getStatus() != null) {
+            existing.setStatus(request.getStatus());
+        }
+
+        if (request.getRankingPublished() != null) {
+            existing.setRankingPublished(request.getRankingPublished());
+        }
+
         return competitionRepository.save(existing);
+    }
+
+    public void delete(Long id) {
+        Competition existing = getById(id);
+        competitionRepository.delete(existing);
     }
 }
