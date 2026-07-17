@@ -24,7 +24,8 @@ public interface UserPublicService {
 
     LockState getLockState(UUID userId);
 
-    void incrementFailedAttempts(UUID userId);
+    /** Returns the new consecutive failed-attempt count after increment. */
+    int incrementFailedAttempts(UUID userId);
 
     void resetFailedAttempts(UUID userId);
 
@@ -48,4 +49,7 @@ public interface UserPublicService {
     boolean hasRole(UUID userId, UserType role);
 
     long countActiveUsers();
+
+    /** Marks all prior access tokens invalid via sessions_invalidated_at watermark. */
+    void markSessionsInvalidated(UUID userId);
 }
