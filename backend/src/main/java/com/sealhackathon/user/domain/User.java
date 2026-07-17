@@ -60,6 +60,11 @@ public class User extends BaseEntity {
     @Column(name = "phone")
     private String phone;
 
+    /** Public API path to optional profile avatar (e.g. /api/public/files/users/{id}/avatar.webp). */
+    @Size(max = 500)
+    @Column(name = "avatar_url", length = 500)
+    private String avatarUrl;
+
     // ── BR-03: FPT_STUDENT → required, regex SE[0-9]{6}
     //           EXTERNAL_STUDENT → required, free-form
     //           Internal roles → nullable ──
@@ -105,7 +110,14 @@ public class User extends BaseEntity {
     @Builder.Default
     private StudentStanding studentStanding = StudentStanding.ENROLLED;
 
-    @Column(name = "temporary_account", nullable = false)
+    @Column(name = "temporary_account", nullable = false, columnDefinition = "BIT NOT NULL DEFAULT 0")
     @Builder.Default
     private boolean temporaryAccount = false;
+
+    /**
+     * Watermark for access-token revocation. Tokens with {@code iat} before this instant
+     * are rejected (refresh tokens are revoked separately).
+     */
+    @Column(name = "sessions_invalidated_at")
+    private LocalDateTime sessionsInvalidatedAt;
 }
