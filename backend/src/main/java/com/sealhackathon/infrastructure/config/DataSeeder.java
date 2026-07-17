@@ -1,0 +1,343 @@
+package com.sealhackathon.infrastructure.config;
+
+import com.sealhackathon.common.domain.SystemConfig;
+import com.sealhackathon.common.enums.AccountStatus;
+import com.sealhackathon.common.enums.StudentStanding;
+import com.sealhackathon.common.enums.UserType;
+import com.sealhackathon.common.repository.SystemConfigRepository;
+import com.sealhackathon.common.util.UniversityUtils;
+import com.sealhackathon.event.domain.ScoringTemplate;
+import com.sealhackathon.event.domain.ScoringTemplateCriterion;
+import com.sealhackathon.event.domain.HackathonEvent;
+import com.sealhackathon.event.repository.HackathonEventRepository;
+import com.sealhackathon.event.repository.ScoringTemplateRepository;
+import com.sealhackathon.user.domain.User;
+import com.sealhackathon.user.repository.UserRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.annotation.Profile;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+
+@Slf4j
+@Component
+@Profile("dev")
+@RequiredArgsConstructor
+public class DataSeeder implements CommandLineRunner {
+
+    private static final String DEV_COORDINATOR_EMAIL = EventDemoSeeder.DEV_COORDINATOR_EMAIL;
+    private static final String DEV_ADMIN_EMAIL = "admin@seal.com";
+
+    /** Dev login hints — password for all seeded accounts: {@link #DEMO_TEST_STUDENT_PASSWORD_HINT} */
+    public static final String DEMO_TEST_STUDENT_PASSWORD_HINT = "12345678";
+
+    /** Used by {@link EventDemoSeeder} (Fall Demo teams). */
+    public static final List<String> DEMO_TEST_STUDENT_EMAILS = List.of(
+            "student1@fpt.edu.vn",
+            "student2@fpt.edu.vn",
+            "student3@fpt.edu.vn",
+            "student4@fpt.edu.vn"
+    );
+
+    /** Students for {@link ScoringDemoSeeder} — separate from submission-lock demo enrollments. */
+    public static final List<String> SCORING_TEST_STUDENT_EMAILS = List.of(
+            "scoretest101@fpt.edu.vn",
+            "scoretest102@fpt.edu.vn",
+            "scoretest103@fpt.edu.vn",
+            "scoretest104@fpt.edu.vn",
+            "scoretest105@fpt.edu.vn",
+            "scoretest106@fpt.edu.vn"
+    );
+
+    /** Students for {@link FeedbackDemoSeeder} — completed event, feedback form at /student/feedback. */
+    public static final List<String> FEEDBACK_TEST_STUDENT_EMAILS = List.of(
+            "feedbacktest101@fpt.edu.vn",
+            "feedbacktest102@fpt.edu.vn",
+            "feedbacktest103@fpt.edu.vn"
+    );
+
+    /** Students for {@link ProgressDemoSeeder} — active submission phase, team not submitted. */
+    public static final List<String> PROGRESS_TEST_STUDENT_EMAILS = List.of(
+            "progresstest101@fpt.edu.vn",
+            "progresstest102@fpt.edu.vn",
+            "progresstest103@fpt.edu.vn",
+            "progresstest104@fpt.edu.vn",
+            "progresstest105@fpt.edu.vn"
+    );
+
+    /** General-purpose students for other events — see {@link OtherEventStudentSeeder}. */
+    public static final String ALT_EVENT_TEST_STUDENT_TARGET_EVENT = "SEAL Summer Hackathon P";
+    public static final List<String> ALT_EVENT_TEST_STUDENT_EMAILS = List.of(
+            "teststudent101@fpt.edu.vn",
+            "teststudent102@fpt.edu.vn",
+            "teststudent103@fpt.edu.vn",
+            "teststudent104@fpt.edu.vn"
+    );
+
+    private static final Set<String> DEV_OWNERSHIP_REALIGN_FROM = Set.of("system", DEV_ADMIN_EMAIL);
+
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final ScoringTemplateRepository scoringTemplateRepository;
+    private final SystemConfigRepository systemConfigRepository;
+    private final EventDemoSeeder eventDemoSeeder;
+    private final SubmissionDemoSeeder submissionDemoSeeder;
+    private final JudgingDemoSeeder judgingDemoSeeder;
+    private final PublishReadyDemoSeeder publishReadyDemoSeeder;
+    private final ScoringDemoSeeder scoringDemoSeeder;
+    private final FeedbackDemoSeeder feedbackDemoSeeder;
+    private final ProgressDemoSeeder progressDemoSeeder;
+    private final OtherEventStudentSeeder otherEventStudentSeeder;
+    private final HackathonEventRepository eventRepository;
+    private final TransactionTemplate transactionTemplate;
+
+    @Value("${app.seeder.resync-dev-accounts:true}")
+    private boolean resyncDevAccounts;
+
+    @Value("${app.seeder.default-password:12345678}")
+    private String defaultSeedPassword;
+
+    @Value("${app.seeder.student-id-prefix:SE19100}")
+    private String studentIdPrefix;
+
+    private static final String DEFAULT_RULES = """
+            1. Teams must comply with the configured minimum and maximum member limits.
+            2. All submissions must be original work created during the hackathon period.
+            3. Plagiarism, cheating, or misrepresentation will result in disqualification.
+            4. Teams must follow the event schedule and submission deadlines for each round.
+            5. Judges' decisions are final. Tiebreaker criteria apply when scores are equal.
+            6. Participants must behave professionally and respect mentors, judges, and other teams.
+            """.trim();
+
+    @Override
+    public void run(String... args) {
+        seedDefaultRules();
+        seedScoringTemplates();
+        seedUser("admin@seal.com", "System Admin", UserType.SYSTEM_ADMIN, null);
+        seedUser("admin2@seal.com", "Platform Admin", UserType.SYSTEM_ADMIN, null);
+        seedUser("coordinator@seal.com", "Event Coordinator", UserType.EVENT_COORDINATOR, null);
+
+        seedUser("lecturer1@fpt.edu.vn", "Nguyen Van A", UserType.LECTURER, null);
+        seedUser("lecturer2@fpt.edu.vn", "Tran Thi B", UserType.LECTURER, null);
+        seedUser("lecturer3@fpt.edu.vn", "Le Van C", UserType.LECTURER, null);
+        seedUser("lecturer4@fpt.edu.vn", "Pham Thi D", UserType.LECTURER, null);
+        seedUser("lecturer5@fpt.edu.vn", "Hoang Van E", UserType.LECTURER, null);
+        seedUser("mentor.lbtest@fpt.edu.vn", "LB Test Mentor", UserType.LECTURER, null);
+
+        seedUser("student1@fpt.edu.vn", "Sinh Vien 1", UserType.FPT_STUDENT, 5);
+        seedUser("student2@fpt.edu.vn", "Sinh Vien 2", UserType.FPT_STUDENT, 6);
+        seedUser("student3@fpt.edu.vn", "Sinh Vien 3", UserType.FPT_STUDENT, 5);
+        seedUser("student4@fpt.edu.vn", "Sinh Vien 4", UserType.FPT_STUDENT, 6);
+        seedUser("student5@fpt.edu.vn", "Sinh Vien 5", UserType.FPT_STUDENT, 5);
+        seedUser("student6@fpt.edu.vn", "Sinh Vien 6", UserType.FPT_STUDENT, 7);
+
+        // Manual team-registration test accounts (khoi1–khoi5)
+        seedUser("khoi1@gmail.com", "Khoi 1", UserType.FPT_STUDENT, 5, "SE290001");
+        seedUser("khoi2@gmail.com", "Khoi 2", UserType.FPT_STUDENT, 5, "SE290002");
+        seedUser("khoi3@gmail.com", "Khoi 3", UserType.FPT_STUDENT, 5, "SE290003");
+        seedUser("khoi4@gmail.com", "Khoi 4", UserType.FPT_STUDENT, 5, "SE290004");
+        seedUser("khoi5@gmail.com", "Khoi 5", UserType.FPT_STUDENT, 5, "SE290005");
+
+        seedUser("teststudent101@fpt.edu.vn", "Test Student 101", UserType.FPT_STUDENT, 5);
+        seedUser("teststudent102@fpt.edu.vn", "Test Student 102", UserType.FPT_STUDENT, 5);
+        seedUser("teststudent103@fpt.edu.vn", "Test Student 103", UserType.FPT_STUDENT, 6);
+        seedUser("teststudent104@fpt.edu.vn", "Test Student 104", UserType.FPT_STUDENT, 6);
+
+        seedUser("scoretest101@fpt.edu.vn", "Score Test 101", UserType.FPT_STUDENT, 5);
+        seedUser("scoretest102@fpt.edu.vn", "Score Test 102", UserType.FPT_STUDENT, 5);
+        seedUser("scoretest103@fpt.edu.vn", "Score Test 103", UserType.FPT_STUDENT, 6);
+        seedUser("scoretest104@fpt.edu.vn", "Score Test 104", UserType.FPT_STUDENT, 6);
+        seedUser("scoretest105@fpt.edu.vn", "Score Test 105", UserType.FPT_STUDENT, 5);
+        seedUser("scoretest106@fpt.edu.vn", "Score Test 106", UserType.FPT_STUDENT, 6);
+
+        seedUser("feedbacktest101@fpt.edu.vn", "Feedback Test 101", UserType.FPT_STUDENT, 5);
+        seedUser("feedbacktest102@fpt.edu.vn", "Feedback Test 102", UserType.FPT_STUDENT, 5);
+        seedUser("feedbacktest103@fpt.edu.vn", "Feedback Test 103", UserType.FPT_STUDENT, 6);
+
+        seedUser("progresstest101@fpt.edu.vn", "Progress Test 101", UserType.FPT_STUDENT, 5);
+        seedUser("progresstest102@fpt.edu.vn", "Progress Test 102", UserType.FPT_STUDENT, 5);
+        seedUser("progresstest103@fpt.edu.vn", "Progress Test 103", UserType.FPT_STUDENT, 6);
+        seedUser("progresstest104@fpt.edu.vn", "Progress Test 104", UserType.FPT_STUDENT, 6);
+        seedUser("progresstest105@fpt.edu.vn", "Progress Test 105", UserType.FPT_STUDENT, 5);
+
+        eventDemoSeeder.seed();
+        submissionDemoSeeder.seed();
+        scoringDemoSeeder.seed();
+        feedbackDemoSeeder.seed();
+        progressDemoSeeder.seed();
+        otherEventStudentSeeder.seed();
+        judgingDemoSeeder.seedIfMissing();
+        publishReadyDemoSeeder.seedIfReady();
+        if (resyncDevAccounts) {
+            alignDevEventOwnership();
+        }
+    }
+
+    /**
+     * Dev-only: coordinators list/manage events by {@code createdBy}. Admin- or system-owned
+     * seeded events are reassigned to the default coordinator account on startup.
+     */
+    void alignDevEventOwnership() {
+        transactionTemplate.executeWithoutResult(status -> {
+            List<UUID> eventIds = eventRepository.findAll().stream()
+                    .filter(this::shouldRealignDevOwnership)
+                    .map(HackathonEvent::getId)
+                    .toList();
+            if (eventIds.isEmpty()) {
+                return;
+            }
+            int updated = eventRepository.reassignOwnership(eventIds, DEV_COORDINATOR_EMAIL);
+            log.info("Aligned {} dev event(s) to coordinator owner {}", updated, DEV_COORDINATOR_EMAIL);
+        });
+    }
+
+    private boolean shouldRealignDevOwnership(HackathonEvent event) {
+        String owner = event.getCreatedBy();
+        if (owner == null || owner.isBlank()) {
+            return true;
+        }
+        return DEV_OWNERSHIP_REALIGN_FROM.contains(owner.trim().toLowerCase());
+    }
+
+    private void seedDefaultRules() {
+        SystemConfig config = systemConfigRepository.findFirstBy().orElse(null);
+        if (config == null) {
+            systemConfigRepository.save(SystemConfig.builder()
+                    .defaultRules(DEFAULT_RULES)
+                    .build());
+            log.info("Seeded system config with default rules");
+            return;
+        }
+        if (config.getDefaultRules() == null || config.getDefaultRules().isBlank()) {
+            config.setDefaultRules(DEFAULT_RULES);
+            systemConfigRepository.save(config);
+            log.info("Restored default rules on existing system config");
+        }
+    }
+
+    private void seedScoringTemplates() {
+        if (scoringTemplateRepository.count() > 0) {
+            return;
+        }
+
+        ScoringTemplate standard = ScoringTemplate.builder()
+                .name("Standard Hackathon")
+                .description("Default scoring criteria for hackathon projects")
+                .build();
+        standard.getCriteria().add(criterion(standard, "Innovation", "Novelty and creativity of the solution", 25, 0, 0, 10));
+        standard.getCriteria().add(criterion(standard, "Technical", "Code quality and architecture", 30, 1, 0, 10));
+        standard.getCriteria().add(criterion(standard, "Business Value", "Market potential and impact", 25, 2, 0, 10));
+        standard.getCriteria().add(criterion(standard, "Presentation", "Demo and pitch quality", 20, 3, 0, 10));
+        scoringTemplateRepository.save(standard);
+
+        ScoringTemplate research = ScoringTemplate.builder()
+                .name("Research Track")
+                .description("Criteria focused on research-oriented submissions")
+                .build();
+        research.getCriteria().add(criterion(research, "Methodology", "Research approach and rigor", 35, 0, 0, 10));
+        research.getCriteria().add(criterion(research, "Results", "Findings and evidence", 35, 1, 0, 10));
+        research.getCriteria().add(criterion(research, "Impact", "Practical or academic impact", 30, 2, 0, 10));
+        scoringTemplateRepository.save(research);
+
+        ScoringTemplate sealPreliminary = ScoringTemplate.builder()
+                .name("SEAL Spring 2026 — Preliminary Round")
+                .description("Preliminary round rubric — scale 1–5")
+                .build();
+        sealPreliminary.getCriteria().add(criterion(sealPreliminary,
+                "Accuracy and Domain Relevance", "Accuracy and Domain Relevance", 30, 0, 1, 5));
+        sealPreliminary.getCriteria().add(criterion(sealPreliminary,
+                "Agentic RAG Architecture & Algorithm", "Agentic RAG Architecture & Algorithm", 30, 1, 1, 5));
+        sealPreliminary.getCriteria().add(criterion(sealPreliminary,
+                "Ideas & Presentation", "Ideas & Presentation", 15, 2, 1, 5));
+        sealPreliminary.getCriteria().add(criterion(sealPreliminary,
+                "Feasibility & Creativity", "Feasibility & Creativity", 15, 3, 1, 5));
+        sealPreliminary.getCriteria().add(criterion(sealPreliminary,
+                "User Experience & Interactive Interface", "User Experience & Interactive Interface", 10, 4, 1, 5));
+        scoringTemplateRepository.save(sealPreliminary);
+
+        ScoringTemplate sealFinal = ScoringTemplate.builder()
+                .name("SEAL Spring 2026 — Finals")
+                .description("Final round rubric — scale 1–5")
+                .build();
+        sealFinal.getCriteria().add(criterion(sealFinal,
+                "Data Processing & Retrieval Quality", "Data Processing & Retrieval Quality", 30, 0, 1, 5));
+        sealFinal.getCriteria().add(criterion(sealFinal,
+                "Reliability & Hallucination Resistance", "Reliability & Hallucination Resistance", 20, 1, 1, 5));
+        sealFinal.getCriteria().add(criterion(sealFinal,
+                "Agent Reasoning & Multi-hop Processing", "Agent Reasoning & Multi-hop Processing", 20, 2, 1, 5));
+        sealFinal.getCriteria().add(criterion(sealFinal,
+                "Practicality & Operational Optimization", "Practicality & Operational Optimization", 20, 3, 1, 5));
+        sealFinal.getCriteria().add(criterion(sealFinal,
+                "Scalability & Innovation", "Scalability & Innovation", 10, 4, 1, 5));
+        scoringTemplateRepository.save(sealFinal);
+
+        log.info("Seeded {} scoring templates", scoringTemplateRepository.count());
+    }
+
+    private ScoringTemplateCriterion criterion(
+            ScoringTemplate template, String name, String description,
+            int weight, int sortOrder, int minScore, int maxScore) {
+        return ScoringTemplateCriterion.builder()
+                .scoringTemplate(template)
+                .name(name)
+                .description(description)
+                .weight(weight)
+                .sortOrder(sortOrder)
+                .minScore(minScore)
+                .maxScore(maxScore)
+                .build();
+    }
+
+    private void seedUser(String email, String fullName, UserType userType, Integer semester) {
+        seedUser(email, fullName, userType, semester, null);
+    }
+
+    private void seedUser(String email, String fullName, UserType userType, Integer semester, String studentIdOverride) {
+        User existing = userRepository.findByEmail(email).orElse(null);
+        if (existing != null) {
+            if (resyncDevAccounts) {
+                resyncDevAccount(existing);
+            }
+            return;
+        }
+
+        User.UserBuilder builder = User.builder()
+                .email(email)
+                .passwordHash(passwordEncoder.encode(defaultSeedPassword))
+                .fullName(fullName)
+                .userType(userType)
+                .status(AccountStatus.ACTIVE)
+                .studentStanding(StudentStanding.ENROLLED);
+
+        if (userType == UserType.FPT_STUDENT) {
+            if (studentIdOverride != null && !studentIdOverride.isBlank()) {
+                builder.studentId(studentIdOverride.trim().toUpperCase());
+            } else {
+                String idNum = email.replaceAll("[^0-9]", "");
+                builder.studentId(studentIdPrefix + idNum);
+            }
+            builder.semester(semester);
+            builder.universityName(UniversityUtils.FPT_UNIVERSITY_NAME);
+        }
+
+        userRepository.save(builder.build());
+        log.info("Seeded account: {} [{}]", email, userType);
+    }
+
+    private void resyncDevAccount(User user) {
+        user.setPasswordHash(passwordEncoder.encode(defaultSeedPassword));
+        user.setStatus(AccountStatus.ACTIVE);
+        user.setFailedLoginAttempts(0);
+        user.setLockedUntil(null);
+        user.setStudentStanding(StudentStanding.ENROLLED);
+        userRepository.save(user);
+        log.info("Re-synced dev account: {} [{}]", user.getEmail(), user.getUserType());
+    }
+}
