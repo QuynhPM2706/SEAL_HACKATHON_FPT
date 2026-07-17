@@ -61,16 +61,6 @@ class AwardControllerIntegrationTest extends BaseIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        participationCertificateRepository.deleteAll();
-        teamAwardRepository.deleteAll();
-        rankingRepository.deleteAll();
-        prizeRepository.deleteAll();
-        teamMemberRepository.deleteAll();
-        teamRepository.deleteAll();
-        roundRepository.deleteAll();
-        eventRepository.deleteAll();
-        super.cleanDatabase();
-
         admin = createAdmin();
         leader1 = createUser("leader1@fpt.edu.vn", UserType.FPT_STUDENT, AccountStatus.ACTIVE);
         leader2 = createUser("leader2@fpt.edu.vn", UserType.FPT_STUDENT, AccountStatus.ACTIVE);
@@ -142,6 +132,25 @@ class AwardControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void getUserAchievements_shouldReturnAwardAndParticipationCertificateForAdmin() throws Exception {
+        assignAwards();
+
+        mockMvc.perform(get("/api/admin/users/" + leader1.getId() + "/achievements")
+                        .header("Authorization", "Bearer " + tokenFor(admin)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()", is(2)))
+                .andExpect(jsonPath("$.data[0].type", is("TEAM_AWARD")))
+                .andExpect(jsonPath("$.data[0].eventName", is("Awards Event")))
+                .andExpect(jsonPath("$.data[0].teamName", is("Team Alpha")))
+                .andExpect(jsonPath("$.data[0].prizeRank", is("FIRST")))
+                .andExpect(jsonPath("$.data[1].type", is("PARTICIPATION_CERTIFICATE")));
+
+        mockMvc.perform(get("/api/admin/users/" + leader1.getId() + "/achievements")
+                        .header("Authorization", "Bearer " + tokenFor(leader1)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void assignAwards_shouldReturn400_whenNoFinalRankings() throws Exception {
         rankingRepository.deleteAll();
 
@@ -199,6 +208,7 @@ class AwardControllerIntegrationTest extends BaseIntegrationTest {
                 .build());
         teamMemberRepository.save(TeamMember.builder()
                 .team(team)
+                .eventId(team.getEventId())
                 .userId(leader.getId())
                 .role(TeamMemberRole.LEADER)
                 .joinedAt(LocalDateTime.now())
@@ -206,6 +216,7 @@ class AwardControllerIntegrationTest extends BaseIntegrationTest {
         if (extraMember != null) {
             teamMemberRepository.save(TeamMember.builder()
                     .team(team)
+                    .eventId(team.getEventId())
                     .userId(extraMember.getId())
                     .role(TeamMemberRole.MEMBER)
                     .joinedAt(LocalDateTime.now())
@@ -223,6 +234,7 @@ class AwardControllerIntegrationTest extends BaseIntegrationTest {
                 .build());
         teamMemberRepository.save(TeamMember.builder()
                 .team(team)
+                .eventId(team.getEventId())
                 .userId(leader.getId())
                 .role(TeamMemberRole.LEADER)
                 .joinedAt(LocalDateTime.now())
