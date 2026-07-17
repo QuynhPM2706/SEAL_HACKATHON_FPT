@@ -1,0 +1,41 @@
+"use client";
+
+import { useMutation } from "@tanstack/react-query";
+import { authApi, type RegisterRequest } from "@/lib/api/auth.api";
+import type { RegisterFormValues } from "@/features/auth/schemas/register.schema";
+
+function toRegisterRequest(values: RegisterFormValues): RegisterRequest {
+  return {
+    fullName: values.fullName.trim(),
+    email: values.email.trim(),
+    password: values.password,
+    userType: values.userType,
+    studentId: values.studentId?.trim().toUpperCase(),
+    universityName:
+      values.userType === "EXTERNAL_STUDENT"
+        ? values.universityName?.trim()
+        : undefined,
+    semester: values.semester,
+    studentStanding: "ENROLLED",
+  };
+}
+
+export function useRegister() {
+  const mutation = useMutation({
+    mutationFn: (payload: RegisterRequest) => authApi.register(payload),
+  });
+
+  return {
+    register: (values: RegisterFormValues) =>
+      mutation.mutate(toRegisterRequest(values)),
+    registerAsync: (values: RegisterFormValues) =>
+      mutation.mutateAsync(toRegisterRequest(values)),
+    registerPayload: (values: RegisterFormValues) => toRegisterRequest(values),
+    resendOtp: (payload: RegisterRequest) => mutation.mutate(payload),
+    isPending: mutation.isPending,
+    error: mutation.error,
+    isError: mutation.isError,
+    isSuccess: mutation.isSuccess,
+    data: mutation.data,
+  };
+}
