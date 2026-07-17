@@ -3,6 +3,7 @@ package com.sealhackathon.user.service;
 import com.sealhackathon.common.enums.AccountStatus;
 import com.sealhackathon.common.enums.StudentStanding;
 import com.sealhackathon.common.enums.UserType;
+import com.sealhackathon.common.exception.DuplicateResourceException;
 import com.sealhackathon.common.exception.ResourceNotFoundException;
 import com.sealhackathon.common.util.UniversityUtils;
 import com.sealhackathon.user.domain.User;
@@ -11,9 +12,11 @@ import com.sealhackathon.user.dto.snapshot.UserSnapshot;
 import com.sealhackathon.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -72,11 +75,13 @@ public class UserPublicServiceImpl implements UserPublicService {
     }
 
     @Override
-    @Transactional
-    public void incrementFailedAttempts(UUID userId) {
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int incrementFailedAttempts(UUID userId) {
         User user = getUserEntity(userId);
-        user.setFailedLoginAttempts(user.getFailedLoginAttempts() + 1);
+        int next = user.getFailedLoginAttempts() + 1;
+        user.setFailedLoginAttempts(next);
         userRepository.save(user);
+        return next;
     }
 
     @Override
@@ -89,7 +94,7 @@ public class UserPublicServiceImpl implements UserPublicService {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void lockAccount(UUID userId, LocalDateTime until) {
         User user = getUserEntity(userId);
         user.setLockedUntil(until);
@@ -102,13 +107,17 @@ public class UserPublicServiceImpl implements UserPublicService {
                                   String phone, String studentId, String universityName,
                                   UserType userType, Integer semester, boolean temporaryAccount,
                                   StudentStanding studentStanding) {
+        if (studentId != null && !studentId.isBlank()
+                && userRepository.existsByStudentId(studentId.trim())) {
+            throw new DuplicateResourceException("User", "studentId", studentId.trim());
+        }
         StudentStanding standing = studentStanding != null ? studentStanding : StudentStanding.ENROLLED;
         User user = User.builder()
                 .email(email)
                 .passwordHash(passwordHash)
                 .fullName(fullName)
                 .phone(phone)
-                .studentId(studentId)
+                .studentId(studentId != null && !studentId.isBlank() ? studentId.trim() : null)
                 .universityName(UniversityUtils.resolveUniversityName(userType, universityName))
                 .userType(userType)
                 .status(AccountStatus.PENDING)
@@ -176,6 +185,15 @@ public class UserPublicServiceImpl implements UserPublicService {
         return userRepository.countByStatus(AccountStatus.ACTIVE);
     }
 
+    @Override
+    @Transactional
+    public void markSessionsInvalidated(UUID userId) {
+        User user = getUserEntity(userId);
+        // Store UTC so comparison with JWT iat (Instant) is timezone-safe.
+        user.setSessionsInvalidatedAt(LocalDateTime.now(ZoneOffset.UTC));
+        userRepository.save(user);
+    }
+
     private User getUserEntity(UUID userId) {
         return userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", userId));
@@ -188,6 +206,7 @@ public class UserPublicServiceImpl implements UserPublicService {
                 .passwordHash(user.getPasswordHash())
                 .fullName(user.getFullName())
                 .phone(user.getPhone())
+                .avatarUrl(user.getAvatarUrl())
                 .studentId(user.getStudentId())
                 .universityName(UniversityUtils.resolveUniversityName(
                         user.getUserType(), user.getUniversityName()))
@@ -195,6 +214,9 @@ public class UserPublicServiceImpl implements UserPublicService {
                 .status(user.getStatus())
                 .semester(user.getSemester())
                 .studentStanding(user.getStudentStanding())
+                .temporaryAccount(user.isTemporaryAccount())
+                .createdAt(user.getCreatedAt())
+                .sessionsInvalidatedAt(user.getSessionsInvalidatedAt())
                 .build();
     }
 }
