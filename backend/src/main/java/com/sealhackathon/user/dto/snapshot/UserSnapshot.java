@@ -8,6 +8,7 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Getter
@@ -21,10 +22,14 @@ public class UserSnapshot {
     private String passwordHash;
     private String fullName;
     private String phone;
+    private String avatarUrl;
     private String studentId;
     private String universityName;
     private UserType userType;
     private AccountStatus status;
     private Integer semester;
     private StudentStanding studentStanding;
+    private boolean temporaryAccount;
+    private LocalDateTime createdAt;
+    private LocalDateTime sessionsInvalidatedAt;
 }
