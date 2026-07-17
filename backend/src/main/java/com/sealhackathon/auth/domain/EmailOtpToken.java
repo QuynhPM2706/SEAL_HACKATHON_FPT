@@ -35,7 +35,7 @@ public class EmailOtpToken extends BaseEntity {
     private UUID userId;
 
     @NotBlank
-    @Column(name = "code", nullable = false, length = 6)
+    @Column(name = "code", nullable = false, length = 64)
     private String code;
 
     @NotNull
@@ -49,4 +49,9 @@ public class EmailOtpToken extends BaseEntity {
     @Column(name = "used", nullable = false)
     @Builder.Default
     private boolean used = false;
+
+    /** Consecutive wrong verification attempts for this token; burns token at max. */
+    @Column(name = "attempts", nullable = false)
+    @Builder.Default
+    private int attempts = 0;
 }
