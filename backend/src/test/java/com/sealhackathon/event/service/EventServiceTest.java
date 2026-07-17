@@ -1,0 +1,493 @@
+package com.sealhackathon.event.service;
+
+import com.sealhackathon.auth.security.UserPrincipal;
+import com.sealhackathon.audit.service.AuditService;
+import com.sealhackathon.auth.service.AuthPublicService;
+import com.sealhackathon.common.enums.UserType;
+import com.sealhackathon.common.exception.BusinessException;
+import com.sealhackathon.common.exception.DuplicateResourceException;
+import com.sealhackathon.common.exception.ResourceNotFoundException;
+import com.sealhackathon.event.domain.HackathonEvent;
+import com.sealhackathon.event.domain.enums.EventStatus;
+import com.sealhackathon.event.dto.request.CreateEventRequest;
+import com.sealhackathon.event.dto.request.PrizeRequest;
+import com.sealhackathon.event.dto.request.UpdateEventRequest;
+import com.sealhackathon.event.dto.request.UpdateEventStatusRequest;
+import com.sealhackathon.event.domain.enums.PrizeRank;
+import com.sealhackathon.event.dto.response.EventResponse;
+import com.sealhackathon.event.repository.HackathonEventRepository;
+import com.sealhackathon.team.service.TeamService;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Spy;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.quality.Strictness;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
+class EventServiceTest {
+
+    @Mock private HackathonEventRepository eventRepository;
+    @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private AuditService auditService;
+    @Mock private AuthPublicService authPublicService;
+    @Mock private EventJudgeService eventJudgeService;
+    @Mock private RoundService roundService;
+    @Mock private TeamService teamService;
+    @Mock private FormatRuleEngine formatRuleEngine;
+    @Mock private EventOwnershipGuard eventOwnershipGuard;
+    @Mock private EventScheduleService eventScheduleService;
+    @Mock private AllowedEmailDomainService allowedEmailDomainService;
+    @Mock private TrackDrawSessionService trackDrawSessionService;
+    @Spy private EventStatusResolver eventStatusResolver = new EventStatusResolver();
+
+    @InjectMocks private EventService eventService;
+
+    private static final UUID ADMIN_USER_ID = UUID.randomUUID();
+    private static final String ADMIN_EMAIL = "admin@test.com";
+
+    @BeforeEach
+    void setUpSecurity() {
+        var auth = new UsernamePasswordAuthenticationToken(
+                new UserPrincipal(ADMIN_USER_ID, ADMIN_EMAIL), null,
+                List.of(new SimpleGrantedAuthority("ROLE_SYSTEM_ADMIN")));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+
+        when(authPublicService.getCurrentUserRole()).thenReturn(UserType.SYSTEM_ADMIN);
+        when(authPublicService.getCurrentUserId()).thenReturn(ADMIN_USER_ID);
+        when(authPublicService.getCurrentUserEmail()).thenReturn(ADMIN_EMAIL);
+        ReflectionTestUtils.setField(eventService, "eventFinder", new EventFinder(eventRepository));
+        when(teamService.disbandUndersizedTeams(any())).thenReturn(0);
+    }
+
+    private static final LocalDate REG_OPEN = LocalDate.now().minusDays(1);
+    private static final LocalDate REG_CLOSE = LocalDate.now().plusDays(28);
+    private static final LocalDate EVENT_START = REG_CLOSE.plusDays(1);
+    private static final LocalDate EVENT_END = EVENT_START.plusDays(61);
+
+    // ── BR-08: Create event ──
+
+    @Test
+    void createEvent_shouldSucceed_whenValidRequest() {
+        CreateEventRequest request = CreateEventRequest.builder()
+                .name("Summer Hackathon")
+                .season("Summer")
+                .year(2026)
+                .startDate(EVENT_START)
+                .endDate(EVENT_END)
+                .registrationOpenDate(REG_OPEN)
+                .registrationDeadline(REG_CLOSE)
+                .build();
+
+        when(eventRepository.existsByName(anyString())).thenReturn(false);
+        when(eventRepository.save(any(HackathonEvent.class))).thenAnswer(i -> {
+            HackathonEvent e = i.getArgument(0);
+            e.setId(UUID.randomUUID());
+            return e;
+        });
+
+        EventResponse result = eventService.createEvent(request);
+
+        assertThat(result.getName()).isEqualTo("Summer Hackathon");
+        assertThat(result.getStatus()).isEqualTo(EventStatus.OPEN);
+        verify(eventPublisher).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void createEvent_shouldThrow_whenEndDateBeforeStartDate() {
+        CreateEventRequest request = CreateEventRequest.builder()
+                .name("Bad Dates")
+                .season("Summer")
+                .year(LocalDate.now().getYear())
+                .startDate(LocalDate.now().plusDays(90))
+                .endDate(LocalDate.now().plusDays(30))
+                .registrationOpenDate(REG_OPEN)
+                .registrationDeadline(REG_CLOSE)
+                .build();
+
+        assertThatThrownBy(() -> eventService.createEvent(request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("End date must be on or after start date");
+    }
+
+    // ── BR-10: Unique event name ──
+
+    @Test
+    void createEvent_shouldThrow_whenNameDuplicate() {
+        CreateEventRequest request = CreateEventRequest.builder()
+                .name("Duplicate")
+                .season("Summer")
+                .year(2026)
+                .startDate(EVENT_START)
+                .endDate(EVENT_END)
+                .registrationOpenDate(REG_OPEN)
+                .registrationDeadline(REG_CLOSE)
+                .build();
+
+        when(eventRepository.existsByName("Duplicate")).thenReturn(true);
+
+        assertThatThrownBy(() -> eventService.createEvent(request))
+                .isInstanceOf(DuplicateResourceException.class);
+    }
+
+    // ── BR-08: No edits after Active ──
+
+    @Test
+    void updateEvent_shouldThrow_whenEventIsActive() {
+        UUID eventId = UUID.randomUUID();
+        HackathonEvent event = buildActiveEvent(eventId);
+        when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+
+        UpdateEventRequest request = UpdateEventRequest.builder()
+                .name("Updated")
+                .season("Winter")
+                .year(2026)
+                .startDate(EVENT_START)
+                .endDate(EVENT_END)
+                .registrationOpenDate(REG_OPEN)
+                .registrationDeadline(REG_CLOSE)
+                .build();
+
+        assertThatThrownBy(() -> eventService.updateEvent(eventId, request, "127.0.0.1"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Cannot modify event during or after the competition period");
+    }
+
+    @Test
+    void updateEvent_shouldSucceed_whenDraft() {
+        UUID eventId = UUID.randomUUID();
+        HackathonEvent event = buildEvent(eventId, EventStatus.UPCOMING);
+        when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+        when(eventRepository.existsByNameAndIdNot(anyString(), any())).thenReturn(false);
+        when(eventRepository.save(any(HackathonEvent.class))).thenAnswer(i -> i.getArgument(0));
+
+        UpdateEventRequest request = UpdateEventRequest.builder()
+                .name("Updated Name")
+                .season("Fall")
+                .year(LocalDate.now().getYear())
+                .startDate(LocalDate.now().plusDays(60))
+                .endDate(LocalDate.now().plusDays(120))
+                .registrationOpenDate(LocalDate.now().plusDays(10))
+                .registrationDeadline(LocalDate.now().plusDays(50))
+                .build();
+
+        EventResponse result = eventService.updateEvent(eventId, request, "127.0.0.1");
+        assertThat(result.getName()).isEqualTo("Updated Name");
+    }
+
+    @Test
+    void createEvent_shouldThrow_whenPrizeValuesOutOfOrder() {
+        CreateEventRequest request = CreateEventRequest.builder()
+                .name("Prize Event")
+                .season("Summer")
+                .year(2026)
+                .startDate(EVENT_START)
+                .endDate(EVENT_END)
+                .registrationOpenDate(REG_OPEN)
+                .registrationDeadline(REG_CLOSE)
+                .prizes(List.of(
+                        PrizeRequest.builder().rank(PrizeRank.FIRST).value("1,000,000 VND").quantity(1).build(),
+                        PrizeRequest.builder().rank(PrizeRank.SECOND).value("5,000,000 VND").quantity(1).build()
+                ))
+                .build();
+
+        when(eventRepository.existsByName(anyString())).thenReturn(false);
+
+        assertThatThrownBy(() -> eventService.createEvent(request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("FIRST prize value must be greater than SECOND");
+    }
+
+    @Test
+    void getEventById_shouldThrow_whenNotFound() {
+        UUID eventId = UUID.randomUUID();
+        when(eventRepository.findById(eventId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> eventService.getEventById(eventId))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    // ── Delete ──
+
+    @Test
+    void deleteEvent_shouldSucceed_whenUpcoming() {
+        UUID eventId = UUID.randomUUID();
+        HackathonEvent event = buildEvent(eventId, EventStatus.UPCOMING);
+        when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+
+        eventService.deleteEvent(eventId, "127.0.0.1");
+
+        // The three non-cascaded children must be cleared before the event, or the V12 FK blocks it.
+        verify(eventScheduleService).deleteByEvent(eventId);
+        verify(allowedEmailDomainService).deleteByEvent(eventId);
+        verify(trackDrawSessionService).deleteByEvent(eventId);
+        verify(eventRepository).delete(event);
+        verify(auditService).log(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void deleteEvent_shouldThrow_whenActive() {
+        UUID eventId = UUID.randomUUID();
+        HackathonEvent event = buildActiveEvent(eventId);
+        when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+
+        assertThatThrownBy(() -> eventService.deleteEvent(eventId, "127.0.0.1"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Cannot delete an active or completed event");
+    }
+
+    // ── Lifecycle: date-based status resolution ──
+
+    @Test
+    void resolveStatus_shouldReturnOpen_duringRegistrationPeriod() {
+        HackathonEvent event = buildEvent(UUID.randomUUID(), EventStatus.UPCOMING);
+        event.setRegistrationOpenDate(LocalDate.now().minusDays(1));
+        event.setStartDate(LocalDate.now().plusDays(2));
+        event.setEndDate(LocalDate.now().plusDays(30));
+        event.setRegistrationDeadline(LocalDate.now().plusDays(1));
+
+        assertThat(eventService.resolveStatus(event)).isEqualTo(EventStatus.OPEN);
+    }
+
+    @Test
+    void resolveStatus_shouldReturnOpen_evenWhenPersistedActive_beforeStartDate() {
+        HackathonEvent event = buildEvent(UUID.randomUUID(), EventStatus.ACTIVE);
+        event.setRegistrationOpenDate(LocalDate.now().minusDays(1));
+        event.setStartDate(LocalDate.now().plusDays(2));
+        event.setEndDate(LocalDate.now().plusDays(30));
+        event.setRegistrationDeadline(LocalDate.now().plusDays(1));
+
+        assertThat(eventService.resolveStatus(event)).isEqualTo(EventStatus.OPEN);
+    }
+
+    @Test
+    void resolveStatus_shouldReturnUpcoming_beforeRegistrationOpens() {
+        HackathonEvent event = buildEvent(UUID.randomUUID(), EventStatus.UPCOMING);
+        event.setRegistrationOpenDate(LocalDate.now().plusDays(3));
+        event.setStartDate(LocalDate.now().plusDays(10));
+        event.setEndDate(LocalDate.now().plusDays(40));
+        event.setRegistrationDeadline(LocalDate.now().plusDays(8));
+
+        assertThat(eventService.resolveStatus(event)).isEqualTo(EventStatus.UPCOMING);
+    }
+
+    @Test
+    void resolveStatus_shouldKeepCompleted_evenBeforeEndDate() {
+        HackathonEvent event = buildEvent(UUID.randomUUID(), EventStatus.COMPLETED);
+        event.setStartDate(LocalDate.now().minusDays(10));
+        event.setEndDate(LocalDate.now().plusMonths(2));
+
+        assertThat(eventService.resolveStatus(event)).isEqualTo(EventStatus.COMPLETED);
+    }
+
+    @Test
+    void finalizePublish_shouldReturnOpen_duringRegistrationPeriod() {
+        UUID eventId = UUID.randomUUID();
+        HackathonEvent event = buildEvent(eventId, EventStatus.UPCOMING);
+        event.setRegistrationOpenDate(LocalDate.now().minusDays(1));
+        event.setStartDate(LocalDate.now().plusDays(2));
+        event.setEndDate(LocalDate.now().plusDays(30));
+        event.setRegistrationDeadline(LocalDate.now().plusDays(1));
+        event.getTracks().add(com.sealhackathon.event.domain.Track.builder()
+                .hackathonEvent(event)
+                .name("Main")
+                .maxTeams(20)
+                .build());
+
+        when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+
+        EventResponse result = eventService.finalizePublish(eventId, "127.0.0.1");
+
+        assertThat(result.getStatus()).isEqualTo(EventStatus.OPEN);
+        verify(auditService).log(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    // ── Status transitions ──
+
+    @Test
+    void updateEventStatus_shouldTransitionOpenToClosedRegistration() {
+        UUID eventId = UUID.randomUUID();
+        HackathonEvent event = buildEvent(eventId, EventStatus.UPCOMING);
+        event.setRegistrationOpenDate(LocalDate.now().minusDays(1));
+        event.setStartDate(LocalDate.now().plusDays(2));
+        event.setEndDate(LocalDate.now().plusDays(30));
+        event.setRegistrationDeadline(LocalDate.now().plusDays(1));
+
+        when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+        when(eventRepository.save(any(HackathonEvent.class))).thenAnswer(i -> i.getArgument(0));
+
+        EventResponse result = eventService.updateEventStatus(
+                eventId,
+                UpdateEventStatusRequest.builder().status(EventStatus.CLOSED_REGISTRATION).build(),
+                "127.0.0.1");
+
+        assertThat(result.getStatus()).isEqualTo(EventStatus.CLOSED_REGISTRATION);
+        verify(auditService).log(any(), eq("EVENT_STATUS_CHANGE"), eq(eventId), any(), any(), any(), any());
+        verify(teamService).disbandUndersizedTeams(eventId);
+    }
+
+    @Test
+    void updateEventStatus_shouldRejectInvalidTransition() {
+        UUID eventId = UUID.randomUUID();
+        HackathonEvent event = buildEvent(eventId, EventStatus.UPCOMING);
+        event.setRegistrationOpenDate(LocalDate.now().plusDays(5));
+        event.setStartDate(LocalDate.now().plusDays(10));
+        event.setEndDate(LocalDate.now().plusDays(40));
+        event.setRegistrationDeadline(LocalDate.now().plusDays(8));
+
+        when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+
+        assertThatThrownBy(() -> eventService.updateEventStatus(
+                eventId,
+                UpdateEventStatusRequest.builder().status(EventStatus.SCORING).build(),
+                "127.0.0.1"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Cannot transition from UPCOMING to SCORING");
+    }
+
+    @Test
+    void updateEventStatus_shouldRejectCancelledTarget() {
+        UUID eventId = UUID.randomUUID();
+        HackathonEvent event = buildEvent(eventId, EventStatus.UPCOMING);
+        when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+
+        assertThatThrownBy(() -> eventService.updateEventStatus(
+                eventId,
+                UpdateEventStatusRequest.builder().status(EventStatus.CANCELLED).build(),
+                "127.0.0.1"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Use cancel endpoint");
+    }
+
+    @Test
+    void updateEventStatus_shouldUseResolvedStatus_notPersistedActive_beforeStartDate() {
+        UUID eventId = UUID.randomUUID();
+        HackathonEvent event = buildEvent(eventId, EventStatus.ACTIVE);
+        event.setRegistrationOpenDate(LocalDate.now().minusDays(1));
+        event.setStartDate(LocalDate.now().plusDays(2));
+        event.setEndDate(LocalDate.now().plusDays(30));
+        event.setRegistrationDeadline(LocalDate.now().plusDays(1));
+
+        when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+
+        assertThatThrownBy(() -> eventService.updateEventStatus(
+                eventId,
+                UpdateEventStatusRequest.builder().status(EventStatus.SCORING).build(),
+                "127.0.0.1"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Cannot transition from OPEN to SCORING");
+    }
+
+    @Test
+    void updateEventStatus_shouldAllowClosedRegistrationToActive() {
+        UUID eventId = UUID.randomUUID();
+        HackathonEvent event = buildEvent(eventId, EventStatus.CLOSED_REGISTRATION);
+        event.setStartDate(LocalDate.now());
+        event.setEndDate(LocalDate.now().plusDays(30));
+        when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+        when(eventRepository.save(any(HackathonEvent.class))).thenAnswer(i -> i.getArgument(0));
+
+        EventResponse result = eventService.updateEventStatus(
+                eventId,
+                UpdateEventStatusRequest.builder().status(EventStatus.ACTIVE).build(),
+                "127.0.0.1");
+
+        assertThat(result.getStatus()).isEqualTo(EventStatus.ACTIVE);
+        verify(teamService).disbandUndersizedTeams(eventId);
+    }
+
+    private HackathonEvent buildEvent(UUID id, EventStatus status) {
+        HackathonEvent event = HackathonEvent.builder()
+                .name("Test Event")
+                .season("Summer")
+                .year(2026)
+                .startDate(EVENT_START)
+                .endDate(EVENT_END)
+                .registrationOpenDate(REG_OPEN)
+                .registrationDeadline(REG_CLOSE)
+                .status(status)
+                .build();
+        event.setId(id);
+        return event;
+    }
+
+    private HackathonEvent buildActiveEvent(UUID id) {
+        HackathonEvent event = HackathonEvent.builder()
+                .name("Test Event")
+                .season("Summer")
+                .year(2026)
+                .startDate(LocalDate.now().minusDays(7))
+                .endDate(LocalDate.now().plusDays(60))
+                .registrationDeadline(LocalDate.now().minusDays(14))
+                .status(EventStatus.ACTIVE)
+                .build();
+        event.setId(id);
+        return event;
+    }
+
+    // ── Public visibility: OPEN list vs detail parity ──
+
+    @Test
+    void getPublicEventById_shouldSucceed_whenOpenWithoutRounds() {
+        UUID eventId = UUID.randomUUID();
+        HackathonEvent event = buildEvent(eventId, EventStatus.UPCOMING);
+        event.setRounds(new java.util.ArrayList<>());
+        event.setTracks(new java.util.ArrayList<>());
+        event.setPrizes(new java.util.ArrayList<>());
+        event.setHonoredGuests(new java.util.ArrayList<>());
+        event.setMentorAssignments(new java.util.ArrayList<>());
+        event.setTiebreakerCriterionIds(new java.util.ArrayList<>());
+
+        when(eventRepository.findByIdWithDetails(eventId)).thenReturn(Optional.of(event));
+
+        EventResponse result = eventService.getPublicEventById(eventId);
+
+        assertThat(result.getId()).isEqualTo(eventId);
+        assertThat(result.getStatus()).isEqualTo(EventStatus.OPEN);
+        assertThat(result.getRoundCount()).isZero();
+    }
+
+    @Test
+    void getPublicEventById_shouldThrow_whenUpcomingWithoutRounds() {
+        UUID eventId = UUID.randomUUID();
+        HackathonEvent event = HackathonEvent.builder()
+                .name("Not Yet Open")
+                .season("Summer")
+                .year(2026)
+                .startDate(LocalDate.now().plusMonths(3))
+                .endDate(LocalDate.now().plusMonths(5))
+                .registrationOpenDate(LocalDate.now().plusMonths(1))
+                .registrationDeadline(LocalDate.now().plusMonths(2))
+                .status(EventStatus.UPCOMING)
+                .build();
+        event.setId(eventId);
+        event.setRounds(new java.util.ArrayList<>());
+
+        when(eventRepository.findByIdWithDetails(eventId)).thenReturn(Optional.of(event));
+
+        assertThatThrownBy(() -> eventService.getPublicEventById(eventId))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+}
