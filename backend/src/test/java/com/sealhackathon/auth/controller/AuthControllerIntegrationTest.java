@@ -1,14 +1,21 @@
 package com.sealhackathon.auth.controller;
 
 import com.sealhackathon.BaseIntegrationTest;
-import com.sealhackathon.auth.repository.EmailOtpTokenRepository;
 import com.sealhackathon.common.enums.AccountStatus;
 import com.sealhackathon.common.enums.UserType;
 import com.sealhackathon.user.domain.User;
+import com.icegreen.greenmail.util.GreenMailUtil;
+import jakarta.mail.internet.MimeMessage;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -17,7 +24,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 class AuthControllerIntegrationTest extends BaseIntegrationTest {
 
-    @Autowired private EmailOtpTokenRepository emailOtpTokenRepository;
+    private static final Pattern OTP_IN_HTML = Pattern.compile(">(\\d{6})<");
+
+    @Autowired private JdbcTemplate jdbcTemplate;
 
     // ── BR-01: Registration → OTP ──
 
@@ -45,10 +54,7 @@ class AuthControllerIntegrationTest extends BaseIntegrationTest {
                                 """))
                 .andExpect(status().isCreated());
 
-        String otp = emailOtpTokenRepository.findTopByUserIdOrderByCreatedAtDesc(
-                        userRepository.findByEmail("verify@fpt.edu.vn").orElseThrow().getId())
-                .orElseThrow()
-                .getCode();
+        String otp = otpFromLastMail();
 
         mockMvc.perform(post("/api/auth/verify-otp")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -66,6 +72,15 @@ class AuthControllerIntegrationTest extends BaseIntegrationTest {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.accessToken", notNullValue()));
+    }
+
+    private String otpFromLastMail() {
+        MimeMessage[] mails = receivedMails();
+        assertThat(mails).as("OTP email should arrive via GreenMail").isNotEmpty();
+        String body = GreenMailUtil.getBody(mails[mails.length - 1]);
+        Matcher matcher = OTP_IN_HTML.matcher(body);
+        assertThat(matcher.find()).as("6-digit OTP in HTML body").isTrue();
+        return matcher.group(1);
     }
 
     // ── BR-02: Internal roles cannot self-register ──
@@ -173,6 +188,70 @@ class AuthControllerIntegrationTest extends BaseIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"email":"lock@test.com","password":"password123"}
+                                """))
+                .andExpect(status().isLocked());
+    }
+
+    @Test
+    void login_shouldPersistFailedAttemptsInDb_afterWrongPassword() throws Exception {
+        User user = createUser("persist-fail@test.com", UserType.FPT_STUDENT, AccountStatus.ACTIVE);
+
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email":"persist-fail@test.com","password":"wrong"}
+                                """))
+                .andExpect(status().isUnauthorized());
+
+        entityManager.clear();
+        User reloaded = userRepository.findById(user.getId()).orElseThrow();
+        assertThat(reloaded.getFailedLoginAttempts()).isEqualTo(1);
+        assertThat(reloaded.getLockedUntil()).isNull();
+    }
+
+    @Test
+    void login_shouldAuditFailure_afterWrongPassword() throws Exception {
+        createUser("audit-fail@test.com", UserType.FPT_STUDENT, AccountStatus.ACTIVE);
+
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email":"audit-fail@test.com","password":"wrong"}
+                                """))
+                .andExpect(status().isUnauthorized());
+
+        // Read outside any transaction: login() rolls back on bad credentials, so this passes only
+        // if the audit write survived that rollback rather than riding on it.
+        entityManager.clear();
+        List<String> payloads = jdbcTemplate.queryForList(
+                "SELECT new_value FROM audit_logs WHERE action = 'LOGIN_FAILED'", String.class);
+        assertThat(payloads).hasSize(1);
+        assertThat(payloads.get(0))
+                .contains("audit-fail@test.com")
+                .contains("\"attempt\":1");
+    }
+
+    @Test
+    void login_shouldSetLockedUntil_after5Failures_andRejectCorrectPassword() throws Exception {
+        User user = createUser("lock-until@test.com", UserType.FPT_STUDENT, AccountStatus.ACTIVE);
+
+        for (int i = 0; i < 5; i++) {
+            mockMvc.perform(post("/api/auth/login")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("""
+                            {"email":"lock-until@test.com","password":"wrong"}
+                            """));
+        }
+
+        entityManager.clear();
+        User reloaded = userRepository.findById(user.getId()).orElseThrow();
+        assertThat(reloaded.getFailedLoginAttempts()).isEqualTo(5);
+        assertThat(reloaded.getLockedUntil()).isNotNull();
+
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email":"lock-until@test.com","password":"password123"}
                                 """))
                 .andExpect(status().isLocked());
     }
