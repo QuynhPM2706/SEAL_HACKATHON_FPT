@@ -1,0 +1,26 @@
+package com.sealhackathon.event.dto.response;
+
+import com.sealhackathon.event.domain.enums.TrackStatus;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+
+import java.util.UUID;
+
+@Getter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class TrackResponse {
+
+    private UUID id;
+    private UUID eventId;
+    private String name;
+    private String description;
+    private String topic;
+    private Integer maxTeams;
+    private UUID scoringTemplateId;
+    private TrackStatus status;
+    private Integer assignedTeamCount;
+}
