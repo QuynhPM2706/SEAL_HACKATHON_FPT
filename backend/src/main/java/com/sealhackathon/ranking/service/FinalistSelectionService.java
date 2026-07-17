@@ -3,13 +3,12 @@ package com.sealhackathon.ranking.service;
 import com.sealhackathon.common.exception.BusinessException;
 import com.sealhackathon.common.exception.ResourceNotFoundException;
 import com.sealhackathon.event.domain.Round;
-import com.sealhackathon.event.domain.enums.CompetitionFormat;
 import com.sealhackathon.event.domain.enums.EventStatus;
 import com.sealhackathon.event.domain.enums.RoundType;
 import com.sealhackathon.event.repository.HackathonEventRepository;
 import com.sealhackathon.event.repository.RoundRepository;
 import com.sealhackathon.event.repository.TrackRepository;
-import com.sealhackathon.event.service.EventService;
+import com.sealhackathon.event.service.EventStatusResolver;
 import com.sealhackathon.event.service.FormatRuleEngine;
 import com.sealhackathon.ranking.domain.FinalistContestedSlot;
 import com.sealhackathon.ranking.domain.FinalistContestedSlotTeam;
@@ -54,7 +53,7 @@ public class FinalistSelectionService {
     private final TrackRepository trackRepository;
     private final TeamPublicService teamPublicService;
     private final SubmissionPublicService submissionPublicService;
-    private final EventService eventService;
+    private final EventStatusResolver eventStatusResolver;
     private final RankingTieBreakComparator tieBreakComparator;
     private final FormatRuleEngine formatRuleEngine;
 
@@ -63,7 +62,7 @@ public class FinalistSelectionService {
         var event = eventRepository.findById(eventId)
                 .orElseThrow(() -> new ResourceNotFoundException("Event", "id", eventId));
 
-        EventStatus resolved = eventService.resolveStatus(event);
+        EventStatus resolved = eventStatusResolver.resolveStatus(event);
         if (resolved != EventStatus.SCORING && resolved != EventStatus.ACTIVE
                 && resolved != EventStatus.COMPLETED) {
             throw new BusinessException(
@@ -86,7 +85,7 @@ public class FinalistSelectionService {
                 .findByRoundIdAndVersionOrderByRankAsc(preliminary.getId(), latestVersion);
 
         SelectionState state = new SelectionState();
-        if (event.getCompetitionFormat() == CompetitionFormat.SEAL_RAG_2026) {
+        if (formatRuleEngine.isSealFormat(event)) {
             selectSealFinalists(eventId, preliminary.getId(), rankings, state);
         } else {
             selectGenericFinalists(preliminary, rankings, state);
@@ -114,7 +113,7 @@ public class FinalistSelectionService {
                 .contestedSlots(contestedResponses)
                 .summary(FinalistSelectionSummaryResponse.builder()
                         .selectedCount(finalistResponses.size())
-                        .targetCount(event.getCompetitionFormat() == CompetitionFormat.SEAL_RAG_2026
+                        .targetCount(formatRuleEngine.isSealFormat(event)
                                 ? formatRuleEngine.getSealFinalistCount()
                                 : preliminary.getAdvancementCutoff())
                         .penaltyEvaluationRequired(penaltyRequired)
