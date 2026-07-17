@@ -1,0 +1,226 @@
+package com.sealhackathon.ranking.service;
+
+import com.sealhackathon.common.exception.BusinessException;
+import com.sealhackathon.event.domain.Round;
+import com.sealhackathon.event.domain.enums.RoundType;
+import com.sealhackathon.event.repository.RoundRepository;
+import com.sealhackathon.ranking.domain.PublishedResult;
+import com.sealhackathon.ranking.domain.Ranking;
+import com.sealhackathon.ranking.dto.FinalRankResult;
+import com.sealhackathon.ranking.dto.response.PublishedResultResponse;
+import com.sealhackathon.ranking.repository.PublishedResultRepository;
+import com.sealhackathon.ranking.repository.RankingRepository;
+import com.sealhackathon.team.domain.enums.CompetitionOutcome;
+import com.sealhackathon.team.service.TeamPublicService;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class RankingServiceTest {
+
+    @Mock private RankingRepository rankingRepository;
+    @Mock private PublishedResultRepository publishedResultRepository;
+    @Mock private RoundRepository roundRepository;
+    @Mock private AggregationService aggregationService;
+    @Mock private AdvancementService advancementService;
+    @Mock private TeamPublicService teamPublicService;
+    @Mock private ApplicationEventPublisher eventPublisher;
+
+    @InjectMocks private RankingService rankingService;
+
+    // ── BR-51: Publish results ──
+
+    @Test
+    void publishResults_shouldSucceed_whenNotAlreadyPublished() {
+        UUID roundId = UUID.randomUUID();
+        UUID publisherId = UUID.randomUUID();
+
+        when(publishedResultRepository.existsByRoundId(roundId)).thenReturn(false);
+        when(rankingRepository.findMaxVersionByRoundId(roundId)).thenReturn(1);
+        when(advancementService.determineAdvancements(roundId)).thenReturn(List.of());
+        when(publishedResultRepository.save(any(PublishedResult.class))).thenAnswer(i -> {
+            PublishedResult pr = i.getArgument(0);
+            pr.setId(UUID.randomUUID());
+            return pr;
+        });
+        when(rankingRepository.findByRoundIdAndVersionOrderByRankAsc(roundId, 1))
+                .thenReturn(List.of());
+
+        PublishedResultResponse result = rankingService.publishResults(roundId, publisherId);
+
+        assertThat(result.getRoundId()).isEqualTo(roundId);
+        assertThat(result.getPublishedBy()).isEqualTo(publisherId);
+        assertThat(result.getDisputeDeadline()).isAfter(result.getPublishedAt());
+    }
+
+    @Test
+    void publishResults_shouldThrow_whenAlreadyPublished() {
+        UUID roundId = UUID.randomUUID();
+        when(publishedResultRepository.existsByRoundId(roundId)).thenReturn(true);
+
+        assertThatThrownBy(() -> rankingService.publishResults(roundId, UUID.randomUUID()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("already published");
+    }
+
+    @Test
+    void publishResults_shouldThrow_whenNoRankings() {
+        UUID roundId = UUID.randomUUID();
+        when(publishedResultRepository.existsByRoundId(roundId)).thenReturn(false);
+        when(rankingRepository.findMaxVersionByRoundId(roundId)).thenReturn(0);
+
+        assertThatThrownBy(() -> rankingService.publishResults(roundId, UUID.randomUUID()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("No rankings");
+    }
+
+    // ── Rankings ──
+
+    @Test
+    void getLatestRankings_shouldReturnEmpty_whenNoVersion() {
+        UUID roundId = UUID.randomUUID();
+        when(rankingRepository.findMaxVersionByRoundId(roundId)).thenReturn(0);
+
+        List<com.sealhackathon.ranking.dto.response.RankingResponse> result =
+                rankingService.getLatestRankings(roundId);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void getLatestRankings_shouldReturnLatestVersion() {
+        UUID roundId = UUID.randomUUID();
+        when(rankingRepository.findMaxVersionByRoundId(roundId)).thenReturn(3);
+
+        Ranking r = Ranking.builder()
+                .teamId(UUID.randomUUID()).roundId(roundId)
+                .finalScore(BigDecimal.valueOf(85)).rank(1)
+                .version(3).calculatedAt(LocalDateTime.now())
+                .build();
+        r.setId(UUID.randomUUID());
+
+        when(rankingRepository.findByRoundIdAndVersionOrderByRankAsc(roundId, 3))
+                .thenReturn(List.of(r));
+        when(teamPublicService.getTeam(any())).thenReturn(java.util.Optional.empty());
+
+        var result = rankingService.getLatestRankings(roundId);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getVersion()).isEqualTo(3);
+    }
+
+    @Test
+    void getLatestRankings_withTrackId_reRanksWithinTrackForPreliminary() {
+        UUID roundId = UUID.randomUUID();
+        UUID trackId = UUID.randomUUID();
+        UUID otherTrackId = UUID.randomUUID();
+
+        when(rankingRepository.findMaxVersionByRoundId(roundId)).thenReturn(1);
+        Round round = Round.builder().roundType(RoundType.PRELIMINARY).build();
+        round.setId(roundId);
+        when(roundRepository.findById(roundId)).thenReturn(java.util.Optional.of(round));
+
+        Ranking firstInTrack = rankingEntity(roundId, trackId, 88, 2);
+        Ranking secondInTrack = rankingEntity(roundId, trackId, 82, 4);
+        Ranking otherTrack = rankingEntity(roundId, otherTrackId, 95, 1);
+
+        when(rankingRepository.findByRoundIdAndVersionOrderByRankAsc(roundId, 1))
+                .thenReturn(List.of(otherTrack, firstInTrack, secondInTrack));
+        when(teamPublicService.getTeam(any())).thenAnswer(inv -> {
+            UUID teamId = inv.getArgument(0);
+            return java.util.Optional.of(com.sealhackathon.team.dto.snapshot.TeamSnapshot.builder()
+                    .id(teamId)
+                    .trackId(teamId.equals(otherTrack.getTeamId()) ? otherTrackId : trackId)
+                    .build());
+        });
+
+        var result = rankingService.getLatestRankings(roundId, trackId);
+
+        assertThat(result).hasSize(2);
+        assertThat(result).extracting(com.sealhackathon.ranking.dto.response.RankingResponse::getRank)
+                .containsExactly(1, 2);
+    }
+
+    @Test
+    void getFinalRankForTeam_shouldReturnUnranked_whenNoRounds() {
+        UUID eventId = UUID.randomUUID();
+        when(roundRepository.findByHackathonEventIdOrderByRoundNumberAsc(eventId)).thenReturn(List.of());
+
+        FinalRankResult result = rankingService.getFinalRankForTeam(UUID.randomUUID(), eventId);
+
+        assertThat(result.finalRank()).isNull();
+        assertThat(result.outcome()).isEqualTo(CompetitionOutcome.UNRANKED);
+    }
+
+    @Test
+    void getFinalRankForTeam_shouldReturnChampion_whenFirstInFinalRound() {
+        UUID eventId = UUID.randomUUID();
+        UUID teamId = UUID.randomUUID();
+        UUID roundId = UUID.randomUUID();
+
+        Round round = Round.builder().roundNumber(1).build();
+        round.setId(roundId);
+        when(roundRepository.findByHackathonEventIdOrderByRoundNumberAsc(eventId)).thenReturn(List.of(round));
+        when(rankingRepository.findMaxVersionByRoundId(roundId)).thenReturn(1);
+        when(rankingRepository.findByTeamIdAndRoundIdAndVersion(teamId, roundId, 1))
+                .thenReturn(Optional.of(rankingEntity(roundId, UUID.randomUUID(), 90, 1)));
+
+        FinalRankResult result = rankingService.getFinalRankForTeam(teamId, eventId);
+
+        assertThat(result.finalRank()).isEqualTo(1);
+        assertThat(result.outcome()).isEqualTo(CompetitionOutcome.CHAMPION);
+    }
+
+    @Test
+    void getFinalRankForTeam_shouldReturnEliminated_whenNotInFinalRound() {
+        UUID eventId = UUID.randomUUID();
+        UUID teamId = UUID.randomUUID();
+        UUID round1 = UUID.randomUUID();
+        UUID round2 = UUID.randomUUID();
+
+        Round r1 = Round.builder().roundNumber(1).build();
+        r1.setId(round1);
+        Round r2 = Round.builder().roundNumber(2).build();
+        r2.setId(round2);
+        when(roundRepository.findByHackathonEventIdOrderByRoundNumberAsc(eventId)).thenReturn(List.of(r1, r2));
+        when(rankingRepository.findMaxVersionByRoundId(round1)).thenReturn(1);
+        when(rankingRepository.findMaxVersionByRoundId(round2)).thenReturn(1);
+        when(rankingRepository.findByTeamIdAndRoundIdAndVersion(teamId, round1, 1))
+                .thenReturn(Optional.of(rankingEntity(round1, UUID.randomUUID(), 80, 3)));
+        when(rankingRepository.findByTeamIdAndRoundIdAndVersion(teamId, round2, 1))
+                .thenReturn(Optional.empty());
+
+        FinalRankResult result = rankingService.getFinalRankForTeam(teamId, eventId);
+
+        assertThat(result.finalRank()).isEqualTo(3);
+        assertThat(result.outcome()).isEqualTo(CompetitionOutcome.ELIMINATED);
+    }
+
+    private static Ranking rankingEntity(UUID roundId, UUID trackId, double score, int rank) {
+        Ranking r = Ranking.builder()
+                .teamId(UUID.randomUUID())
+                .roundId(roundId)
+                .finalScore(BigDecimal.valueOf(score))
+                .rank(rank)
+                .version(1)
+                .calculatedAt(LocalDateTime.now())
+                .build();
+        r.setId(UUID.randomUUID());
+        return r;
+    }
+}
