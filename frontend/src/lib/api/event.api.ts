@@ -28,6 +28,11 @@ export interface HonoredGuestResponse {
   title: string | null;
 }
 
+export interface EventStaffPublicResponse {
+  id: string;
+  fullName: string;
+}
+
 export interface EventResponse {
   id: string;
   name: string;
@@ -49,14 +54,20 @@ export interface EventResponse {
   semesterMin: number | null;
   semesterMax: number | null;
   scoringTemplateId: string | null;
+  /** Per-criterion score ceiling (1–N). Allowed: 5, 10, 100. Default 100. */
+  scoreScaleMax?: number | null;
   tiebreakerCriteria: string | null;
   tiebreakerCriterionIds?: string[] | null;
   roundCount: number;
   mentorCount: number;
+  judgeCount?: number;
+  teamCount?: number;
   trackCount: number;
   tracks: TrackResponse[];
   prizes: PrizeResponse[];
   honoredGuests: HonoredGuestResponse[];
+  judges?: EventStaffPublicResponse[];
+  mentors?: EventStaffPublicResponse[];
   createdAt: string;
 }
 
@@ -78,7 +89,8 @@ export interface TrackRequest {
   name: string;
   description?: string;
   topic?: string;
-  maxTeams: number;
+  /** Ignored — track capacity removed. */
+  maxTeams?: number | null;
   scoringTemplateId?: string;
 }
 
@@ -99,6 +111,8 @@ export interface CreateEventRequest {
   semesterMin?: number;
   semesterMax?: number;
   scoringTemplateId?: string;
+  /** Per-criterion score ceiling (1–N). Allowed: 5, 10, 100. Default 100. */
+  scoreScaleMax?: number;
   tiebreakerCriteria?: string;
   tiebreakerCriterionIds?: string[];
   tracks?: TrackRequest[];

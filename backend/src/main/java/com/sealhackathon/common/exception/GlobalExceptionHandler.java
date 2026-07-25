@@ -5,6 +5,7 @@ import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.InvalidDataAccessResourceUsageException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.stream.Collectors;
 
@@ -90,7 +92,8 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleMaxUploadSize(MaxUploadSizeExceededException ex) {
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
-                .body(ApiResponse.error("Uploaded file is too large."));
+                .body(ApiResponse.error(
+                        "Uploaded file is too large. PDF must be 5 MB or smaller."));
     }
 
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
@@ -108,12 +111,30 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error("Operation could not be completed due to a data conflict."));
     }
 
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<ApiResponse<Void>> handleOptimisticLock(OptimisticLockingFailureException ex) {
+        log.warn("Optimistic lock conflict: {}", ex.getMessage());
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
+                .body(ApiResponse.error(
+                        "This record was updated by someone else. Refresh and try again."));
+    }
+
     @ExceptionHandler(InvalidDataAccessResourceUsageException.class)
     public ResponseEntity<ApiResponse<Void>> handleInvalidDataAccess(InvalidDataAccessResourceUsageException ex) {
         log.error("Invalid data access:", ex);
         return ResponseEntity
                 .status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ApiResponse.error("A database error occurred. Please contact support if this persists."));
+    }
+
+    // Must stay ahead of the Exception handler below: an unknown route is routine traffic
+    // (bots, scanners, stale clients), not a server fault worth logging.
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNoResourceFound(NoResourceFoundException ex) {
+        return ResponseEntity
+                .status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.error("The requested endpoint does not exist."));
     }
 
     @ExceptionHandler(Exception.class)

@@ -1,0 +1,46 @@
+spring:
+  datasource:
+    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    hikari:
+      connection-init-sql: SET QUOTED_IDENTIFIER ON
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.SQLServerDialect
+  mail:
+    host: localhost
+    port: 3025
+
+app:
+  jwt:
+    secret: dGVzdHNlY3JldGtleWZvcmludGVncmF0aW9udGVzdHNzZWFsaGFja2F0aG9uMjAyNnN3cDM5MQ==
+    access-token-expiration-ms: 900000
+    refresh-token-expiration-days: 7
+    password-reset-token-expiration-minutes: 15
+    issuer: seal-hackathon-test
+  frontend:
+    url: http://localhost:3000
+  cors:
+    allowed-origins: http://localhost:3000
+  storage:
+    upload-dir: ./uploads
+  protected-emails: protected@test.com
+  otp:
+    expiration-seconds: 180
+    resend-cooldown-seconds: 300
+  hackathon:
+    seal:
+      max-tracks: 3
+      finalist-count: 6
+      top-per-track: 2
+  submission:
+    pdf:
+      max-size-bytes: 5242880
