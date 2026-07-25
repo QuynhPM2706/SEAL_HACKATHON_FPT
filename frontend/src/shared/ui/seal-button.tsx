@@ -97,7 +97,7 @@ export function SealButton(props: SealButtonProps) {
     disabled,
     type = "button",
     ...rest
-  } = props;
+  } = props as SealButtonAsButton;
 
   return (
     <button
