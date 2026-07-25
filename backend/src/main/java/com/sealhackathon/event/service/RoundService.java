@@ -2,8 +2,11 @@ package com.sealhackathon.event.service;
 
 import com.sealhackathon.common.exception.BusinessException;
 import com.sealhackathon.common.exception.ResourceNotFoundException;
+import com.sealhackathon.event.domain.Criteria;
 import com.sealhackathon.event.domain.HackathonEvent;
 import com.sealhackathon.event.domain.Round;
+import com.sealhackathon.event.domain.ScoringTemplate;
+import com.sealhackathon.event.domain.ScoringTemplateCriterion;
 import com.sealhackathon.event.domain.enums.AdvancementRule;
 import com.sealhackathon.event.domain.enums.EventStatus;
 import com.sealhackathon.event.domain.enums.RoundType;
@@ -13,6 +16,7 @@ import com.sealhackathon.event.dto.response.RoundResponse;
 import com.sealhackathon.event.event.ScoringWindowReopenedEvent;
 import com.sealhackathon.event.repository.HackathonEventRepository;
 import com.sealhackathon.event.repository.RoundRepository;
+import com.sealhackathon.event.repository.ScoringTemplateRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
@@ -20,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
@@ -29,6 +34,7 @@ public class RoundService {
 
     private final RoundRepository roundRepository;
     private final HackathonEventRepository eventRepository;
+    private final ScoringTemplateRepository scoringTemplateRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final FormatRuleEngine formatRuleEngine;
 
@@ -52,6 +58,7 @@ public class RoundService {
         validateSealRoundType(event, request.getRoundType());
 
         int roundWeight = resolveRoundWeight(eventId, request.getRoundWeight());
+        int cutoff = request.getAdvancementCutoff() != null ? request.getAdvancementCutoff() : 1;
 
         Round round = Round.builder()
                 .hackathonEvent(event)
@@ -61,12 +68,12 @@ public class RoundService {
                 .endDate(request.getEndDate())
                 .submissionDeadline(request.getSubmissionDeadline())
                 .scoringDeadline(request.getScoringDeadline())
-                .advancementCutoff(request.getAdvancementCutoff())
+                .advancementCutoff(cutoff)
                 .roundWeight(roundWeight)
                 .roundType(request.getRoundType())
                 .advancementRule(request.getAdvancementRule() != null
                         ? request.getAdvancementRule()
-                        : AdvancementRule.GLOBAL_TOP_N)
+                        : AdvancementRule.PER_GROUP_TOP_N)
                 .minJudgesPerRound(request.getMinJudgesPerRound() != null
                         ? request.getMinJudgesPerRound() : 2)
                 .build();
@@ -76,6 +83,9 @@ public class RoundService {
             rebalanceRoundWeights(eventId);
             round = roundRepository.findById(round.getId()).orElse(round);
         }
+        applyDefaultCriteria(round, event);
+        reconcileRoundTypesForEvent(eventId);
+        round = roundRepository.findById(round.getId()).orElse(round);
         return toResponse(round);
     }
 
@@ -109,7 +119,9 @@ public class RoundService {
         round.setEndDate(request.getEndDate());
         round.setSubmissionDeadline(request.getSubmissionDeadline());
         round.setScoringDeadline(request.getScoringDeadline());
-        round.setAdvancementCutoff(request.getAdvancementCutoff());
+        round.setAdvancementCutoff(request.getAdvancementCutoff() != null
+                ? request.getAdvancementCutoff()
+                : round.getAdvancementCutoff());
         round.setRoundWeight(roundWeight);
         if (request.getRoundType() != null) {
             round.setRoundType(request.getRoundType());
@@ -122,6 +134,8 @@ public class RoundService {
         }
 
         round = roundRepository.save(round);
+        reconcileRoundTypesForEvent(event.getId());
+        round = roundRepository.findById(round.getId()).orElse(round);
         return toResponse(round);
     }
 
@@ -159,8 +173,44 @@ public class RoundService {
     @Transactional
     public void deleteRound(UUID roundId) {
         Round round = getRound(roundId);
+        UUID eventId = round.getHackathonEvent().getId();
         guardDraftOrActive(round.getHackathonEvent());
         roundRepository.delete(round);
+        reconcileRoundTypesForEvent(eventId);
+    }
+
+    /**
+     * Final = round with the latest endDate. Others are PRELIMINARY.
+     * Types are persisted so existing FINAL checks keep working.
+     */
+    @Transactional
+    public void reconcileRoundTypesForEvent(UUID eventId) {
+        List<Round> rounds = roundRepository.findByHackathonEventIdOrderByRoundNumberAsc(eventId);
+        if (rounds.isEmpty()) {
+            return;
+        }
+        Round latestEnding = rounds.stream()
+                .max(java.util.Comparator
+                        .comparing(Round::getEndDate)
+                        .thenComparing(Round::getRoundNumber))
+                .orElse(null);
+        if (latestEnding == null) {
+            return;
+        }
+        for (Round r : rounds) {
+            if (r.getId().equals(latestEnding.getId())) {
+                r.setRoundType(RoundType.FINAL);
+                r.setAdvancementRule(AdvancementRule.FINALIST_POOL);
+            } else {
+                r.setRoundType(RoundType.PRELIMINARY);
+                if (r.getAdvancementRule() == null
+                        || r.getAdvancementRule() == AdvancementRule.FINALIST_POOL
+                        || r.getAdvancementRule() == AdvancementRule.NONE) {
+                    r.setAdvancementRule(AdvancementRule.PER_GROUP_TOP_N);
+                }
+            }
+        }
+        roundRepository.saveAll(rounds);
     }
 
     Round getRound(UUID roundId) {
@@ -286,6 +336,54 @@ public class RoundService {
                     "roundType is required for SEAL format rounds (PRELIMINARY or FINAL)",
                     HttpStatus.BAD_REQUEST) {};
         }
+    }
+
+    /**
+     * Copies criteria onto a newly created round from the event scoring template when set,
+     * otherwise from the system {@code Default} template (BR-44). Admin/coordinator can still
+     * replace criteria afterwards.
+     */
+    private void applyDefaultCriteria(Round round, HackathonEvent event) {
+        if (round.getCriteria() != null && !round.getCriteria().isEmpty()) {
+            return;
+        }
+
+        ScoringTemplate template = null;
+        if (event.getScoringTemplateId() != null) {
+            template = scoringTemplateRepository.findWithCriteriaById(event.getScoringTemplateId())
+                    .orElse(null);
+        }
+        if (template == null) {
+            template = scoringTemplateRepository
+                    .findWithCriteriaByNameIgnoreCase(ScoringTemplateService.DEFAULT_TEMPLATE_NAME)
+                    .orElse(null);
+        }
+        if (template == null || template.getCriteria() == null || template.getCriteria().isEmpty()) {
+            return;
+        }
+
+        List<ScoringTemplateCriterion> source = template.getCriteria().stream()
+                .sorted(Comparator.comparing(c -> c.getSortOrder() != null ? c.getSortOrder() : 0))
+                .toList();
+        for (ScoringTemplateCriterion tc : source) {
+            round.getCriteria().add(Criteria.builder()
+                    .round(round)
+                    .name(tc.getName())
+                    .description(tc.getDescription())
+                    .weight(tc.getWeight())
+                    .sortOrder(tc.getSortOrder() != null ? tc.getSortOrder() : 0)
+                    .minScore(1)
+                    .maxScore(resolveEventScoreScaleMax(event, tc))
+                    .build());
+        }
+        roundRepository.save(round);
+    }
+
+    private static int resolveEventScoreScaleMax(HackathonEvent event, ScoringTemplateCriterion tc) {
+        if (event.getScoreScaleMax() != null) {
+            return event.getScoreScaleMax();
+        }
+        return tc.getMaxScore() != null ? tc.getMaxScore() : 100;
     }
 
     private void guardDraftOrActive(HackathonEvent event) {
