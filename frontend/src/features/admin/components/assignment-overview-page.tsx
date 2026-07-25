@@ -522,7 +522,7 @@ export function AssignmentOverviewPage() {
                 eventId={eventId}
                 track={selectedTrack}
                 roundId={roundId}
-                roundType={rounds.find((r) => r.id === roundId)?.roundType}
+                roundType={rounds.find((r) => r.id === roundId)?.roundType ?? undefined}
               />
             ) : null}
           </div>
