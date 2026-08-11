@@ -1,7 +1,13 @@
 import { api } from "./api-client";
 
-export type FinalistSelectionMethod = "TOP_PER_TRACK" | "OVERFLOW_FILL" | "PENALTY_PENDING";
-export type ContestedSlotType = "PER_TRACK_CUTOFF" | "OVERFLOW_FILL";
+export type FinalistSelectionMethod =
+  | "TOP_PER_TRACK"
+  | "TOP_PER_GROUP"
+  | "OVERFLOW_FILL"
+  | "PENALTY_PENDING"
+  | "MANUAL";
+export type ContestedSlotType = "PER_TRACK_CUTOFF" | "PER_GROUP_CUTOFF" | "OVERFLOW_FILL";
+export type FinalistSelectionMode = "AUTO" | "MANUAL";
 
 export interface FinalistResponse {
   id: string;
@@ -38,6 +44,9 @@ export interface FinalistSelectionSummaryResponse {
   selectedCount: number;
   targetCount: number;
   penaltyEvaluationRequired: boolean;
+  bucketScope?: string | null;
+  bucketLabel?: string | null;
+  topN?: number | null;
 }
 
 export interface FinalistSelectResultResponse {
@@ -46,9 +55,19 @@ export interface FinalistSelectResultResponse {
   summary: FinalistSelectionSummaryResponse;
 }
 
+export interface SelectFinalistsRequest {
+  mode: FinalistSelectionMode;
+  topN?: number;
+  teamIds?: string[];
+}
+
 export const finalistApi = {
-  select(eventId: string): Promise<FinalistSelectResultResponse> {
-    return api.post<FinalistSelectResultResponse>(`/events/${eventId}/finalists/select`);
+  preview(eventId: string, body: SelectFinalistsRequest): Promise<FinalistSelectResultResponse> {
+    return api.post<FinalistSelectResultResponse>(`/events/${eventId}/finalists/preview`, body);
+  },
+
+  select(eventId: string, body?: SelectFinalistsRequest): Promise<FinalistSelectResultResponse> {
+    return api.post<FinalistSelectResultResponse>(`/events/${eventId}/finalists/select`, body ?? {});
   },
 
   list(eventId: string): Promise<FinalistResponse[]> {

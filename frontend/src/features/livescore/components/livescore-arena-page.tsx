@@ -13,8 +13,17 @@ import {
   useFinalists,
   useContestedFinalistSlots,
   useSelectFinalists,
+  usePreviewFinalists,
 } from "@/features/coordinator/hooks/use-finalists";
+import type {
+  FinalistResponse,
+  FinalistSelectResultResponse,
+  FinalistSelectionMode,
+} from "@/lib/api/finalist.api";
 import { useTeamAwards, useAssignAwards } from "@/features/coordinator/hooks/use-awards";
+import { useAdminEvent } from "@/features/admin/hooks/use-admin-hackathons";
+import { formatPrizeAmount, getPrizeLabel, resolveAssignmentMode } from "@/lib/prize.utils";
+import type { PrizeResponse } from "@/lib/api/event.api";
 import type { LiveScoreEntry, LiveScoreBoard, RankingEvent, LiveScoreStatus, TrackInfo } from "@/lib/api/livescore.api";
 import type { RoundType } from "@/lib/api/types";
 
@@ -280,12 +289,17 @@ function CompetitionProgressOverview({ board }: { board: LiveScoreBoard }) {
 
 type StepStatus = "pending" | "active" | "done";
 
-const PRIZE_PREVIEW = [
-  { label: "First Place", value: "7,000,000 VND" },
-  { label: "Second Place", value: "5,000,000 VND" },
-  { label: "Third Place", value: "3,000,000 VND" },
-  { label: "Encouragement", value: "1,500,000 VND" },
-];
+const RANK_BASED_ORDER: PrizeResponse["rank"][] = ["FIRST", "SECOND", "THIRD", "CONSOLATION"];
+
+function sortRankBasedPrizes(prizes: PrizeResponse[]): PrizeResponse[] {
+  return prizes
+    .filter((p) => resolveAssignmentMode(p.rank, p.assignmentMode) === "RANK_BASED")
+    .sort((a, b) => {
+      const ai = RANK_BASED_ORDER.indexOf(a.rank);
+      const bi = RANK_BASED_ORDER.indexOf(b.rank);
+      return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+    });
+}
 
 function panelBtnStyle(bg: string, disabled: boolean): React.CSSProperties {
   return {
@@ -413,62 +427,260 @@ function PublishResultsBlock({
   );
 }
 
-function FinalistsPanel({ eventId }: { eventId: string }) {
+function AdvanceTeamsPanel({
+  eventId,
+  rankings,
+}: {
+  eventId: string;
+  rankings: LiveScoreEntry[];
+}) {
   const { data: finalists = [] } = useFinalists(eventId);
   const { data: contested = [] } = useContestedFinalistSlots(eventId);
+  const previewMutation = usePreviewFinalists(eventId);
   const selectMutation = useSelectFinalists(eventId);
 
+  const [mode, setMode] = useState<FinalistSelectionMode>("AUTO");
+  const [topN, setTopN] = useState("2");
+  const [manualTeamIds, setManualTeamIds] = useState<string[]>([]);
+  const [preview, setPreview] = useState<FinalistSelectResultResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
   const hasFinalists = finalists.length > 0;
-  const byTrack = finalists.reduce<Record<string, typeof finalists>>((acc, f) => {
-    const key = f.trackName ?? "Unknown";
+  const confirmed = hasFinalists && !preview;
+  const bucketLabel = preview?.summary.bucketLabel ?? "per group";
+
+  const toggleManualTeam = (teamId: string) => {
+    setManualTeamIds((prev) =>
+      prev.includes(teamId) ? prev.filter((id) => id !== teamId) : [...prev, teamId],
+    );
+    setPreview(null);
+  };
+
+  const handlePreview = () => {
+    setError(null);
+    if (mode === "AUTO") {
+      const n = Number(topN);
+      if (!Number.isFinite(n) || n < 1) {
+        setError("Enter a valid Top N (≥ 1).");
+        return;
+      }
+      previewMutation.mutate(
+        { mode: "AUTO", topN: Math.floor(n) },
+        {
+          onSuccess: (data) => setPreview(data),
+          onError: (err: Error) => setError(err.message),
+        },
+      );
+      return;
+    }
+    if (manualTeamIds.length === 0) {
+      setError("Select at least one team.");
+      return;
+    }
+    previewMutation.mutate(
+      { mode: "MANUAL", teamIds: manualTeamIds },
+      {
+        onSuccess: (data) => setPreview(data),
+        onError: (err: Error) => setError(err.message),
+      },
+    );
+  };
+
+  const handleConfirm = () => {
+    setError(null);
+    if (mode === "AUTO") {
+      const n = Number(topN);
+      if (!Number.isFinite(n) || n < 1) {
+        setError("Enter a valid Top N (≥ 1).");
+        return;
+      }
+      selectMutation.mutate(
+        { mode: "AUTO", topN: Math.floor(n) },
+        {
+          onSuccess: () => setPreview(null),
+          onError: (err: Error) => setError(err.message),
+        },
+      );
+      return;
+    }
+    const teamIds = preview?.finalists.map((f) => f.teamId) ?? manualTeamIds;
+    if (teamIds.length === 0) {
+      setError("Select at least one team.");
+      return;
+    }
+    selectMutation.mutate(
+      { mode: "MANUAL", teamIds },
+      {
+        onSuccess: () => setPreview(null),
+        onError: (err: Error) => setError(err.message),
+      },
+    );
+  };
+
+  const displayFinalists: FinalistResponse[] = preview?.finalists?.length
+    ? preview.finalists
+    : finalists;
+  const displayContested = preview?.contestedSlots?.length ? preview.contestedSlots : contested;
+  const byTrack = displayFinalists.reduce<Record<string, FinalistResponse[]>>((acc, f) => {
+    const key = f.trackName ?? "Teams";
     if (!acc[key]) acc[key] = [];
     acc[key].push(f);
     return acc;
   }, {});
 
+  const pending = previewMutation.isPending || selectMutation.isPending;
+  const nothingToConfirm = mode === "AUTO"
+    ? !topN
+    : !preview && manualTeamIds.length === 0;
+  const confirmDisabled = pending || confirmed || nothingToConfirm;
+
   return (
-    <StepBlock number={2} title="Select Finalists" status={hasFinalists ? "done" : "active"}>
-      {!hasFinalists ? (
-        <>
-          <p style={{ fontSize: 12, color: "#8891a5", marginBottom: 8, lineHeight: 1.4 }}>
-            Auto-proposes top 2 per track → 6 finalists total. Ties create a contested slot.
-          </p>
-          <button
-            onClick={() => selectMutation.mutate()}
-            disabled={selectMutation.isPending}
-            style={panelBtnStyle("#0e7490", selectMutation.isPending)}
-          >
-            {selectMutation.isPending ? "Selecting..." : "Auto-Select Finalists"}
-          </button>
-        </>
+    <StepBlock number={2} title="Advance Teams" status={hasFinalists ? "done" : "active"}>
+      <p style={{ fontSize: 12, color: "#8891a5", marginBottom: 8, lineHeight: 1.4 }}>
+        Choose Top N (auto) or pick teams manually, then Preview → Confirm. Next round FINAL also
+        syncs finalists.
+      </p>
+
+      <div className="flex gap-2" style={{ marginBottom: 10 }}>
+        {(["AUTO", "MANUAL"] as FinalistSelectionMode[]).map((m) => {
+          const active = mode === m;
+          return (
+            <button
+              key={m}
+              type="button"
+              onClick={() => {
+                setMode(m);
+                setPreview(null);
+                setError(null);
+              }}
+              style={{
+                flex: 1,
+                padding: "8px 10px",
+                fontSize: 12,
+                fontWeight: 600,
+                borderRadius: 6,
+                border: active ? "1px solid #0e7490" : "1px solid rgba(198,198,205,0.7)",
+                backgroundColor: active ? "#0e7490" : "#f8fafc",
+                color: active ? "#fff" : "#0e1528",
+                cursor: "pointer",
+              }}
+            >
+              {m === "AUTO" ? "Auto Top N" : "Manual"}
+            </button>
+          );
+        })}
+      </div>
+
+      {mode === "AUTO" ? (
+        <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
+          <label style={{ fontSize: 12, color: "#8891a5", whiteSpace: "nowrap" }}>Top N</label>
+          <input
+            type="number"
+            min={1}
+            max={50}
+            value={topN}
+            onChange={(e) => {
+              setTopN(e.target.value);
+              setPreview(null);
+            }}
+            placeholder="e.g. 2"
+            style={{
+              width: 72,
+              padding: "6px 8px",
+              fontSize: 12,
+              border: "1px solid rgba(198,198,205,0.7)",
+              borderRadius: 6,
+            }}
+          />
+          <span style={{ fontSize: 12, color: "#8891a5" }}>
+            {preview?.summary.bucketLabel ? preview.summary.bucketLabel : "per track / group"}
+          </span>
+        </div>
       ) : (
+        <div style={{ marginBottom: 10, maxHeight: 160, overflowY: "auto" }}>
+          {rankings.length === 0 ? (
+            <p style={{ fontSize: 12, color: "#dc2626" }}>No rankings yet — recalculate first.</p>
+          ) : (
+            rankings.map((r) => {
+              const checked = manualTeamIds.includes(r.teamId);
+              return (
+                <label
+                  key={r.teamId}
+                  className="flex items-center gap-2"
+                  style={{ fontSize: 12, marginBottom: 4, cursor: "pointer" }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleManualTeam(r.teamId)}
+                  />
+                  <span style={{ color: "#8891a5", minWidth: 28 }}>#{r.rank}</span>
+                  <span style={{ fontWeight: 500, color: "#0e1528" }}>{r.teamName}</span>
+                </label>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      <div className="flex gap-2" style={{ marginBottom: 10 }}>
+        <button
+          type="button"
+          onClick={handlePreview}
+          disabled={pending}
+          style={panelBtnStyle("#6366f1", pending)}
+        >
+          {previewMutation.isPending ? "Previewing..." : "Preview"}
+        </button>
+        <button
+          type="button"
+          onClick={handleConfirm}
+          disabled={confirmDisabled}
+          style={panelBtnStyle("#0e7490", confirmDisabled)}
+        >
+          {selectMutation.isPending
+            ? "Confirming..."
+            : confirmed
+              ? "Advancement confirmed"
+              : "Confirm"}
+        </button>
+      </div>
+
+      {confirmed && (
+        <p style={{ fontSize: 11, color: "#8891a5", marginBottom: 8 }}>
+          Locked in — run a new Preview to change who advances.
+        </p>
+      )}
+
+      {error && (
+        <p style={{ fontSize: 11, color: "#dc2626", marginBottom: 8 }}>{error}</p>
+      )}
+
+      {(preview || hasFinalists) && (
         <>
+          <p style={{ fontSize: 12, color: "#0e1528", marginBottom: 6 }}>
+            {preview
+              ? `Preview: ${preview.summary.selectedCount} team(s) (${bucketLabel})`
+              : `${finalists.length} team(s) advanced`}
+          </p>
           {Object.entries(byTrack).map(([trackName, teams]) => (
             <div key={trackName} style={{ marginBottom: 8 }}>
-              <p style={{ fontSize: 11, fontWeight: 600, color: "#8891a5", marginBottom: 4 }}>{trackName}</p>
+              <p style={{ fontSize: 11, fontWeight: 600, color: "#8891a5", marginBottom: 4 }}>
+                {trackName}
+              </p>
               {teams.map((f) => (
-                <div key={f.id} className="flex items-center gap-2" style={{ fontSize: 12, marginBottom: 2 }}>
+                <div
+                  key={f.id}
+                  className="flex items-center gap-2"
+                  style={{ fontSize: 12, marginBottom: 2 }}
+                >
                   <span style={{ color: "#8891a5", minWidth: 20 }}>#{f.preliminaryRank}</span>
                   <span style={{ fontWeight: 500, color: "#0e1528" }}>{f.teamName}</span>
-                  {f.selectionMethod === "OVERFLOW_FILL" && (
-                    <span
-                      style={{
-                        fontSize: 10,
-                        fontWeight: 600,
-                        color: "#92400e",
-                        backgroundColor: "#fef3c7",
-                        padding: "1px 6px",
-                        borderRadius: 4,
-                      }}
-                    >
-                      Wildcard
-                    </span>
-                  )}
                 </div>
               ))}
             </div>
           ))}
-          {contested.length > 0 && (
+          {displayContested.length > 0 && (
             <div
               style={{
                 backgroundColor: "#fef3c7",
@@ -479,22 +691,15 @@ function FinalistsPanel({ eventId }: { eventId: string }) {
               }}
             >
               <p style={{ fontSize: 12, fontWeight: 600, color: "#92400e", marginBottom: 4 }}>
-                {contested.length} contested slot(s) — tie-break needed
+                {displayContested.length} contested slot(s) — tie-break needed
               </p>
-              {contested.map((slot) => (
+              {displayContested.map((slot) => (
                 <p key={slot.id} style={{ fontSize: 11, color: "#92400e", marginBottom: 2 }}>
-                  {slot.trackName ?? "Track"}: {slot.teams.map((t) => t.teamName).join(" vs ")}
+                  {slot.trackName ?? "Bucket"}: {slot.teams.map((t) => t.teamName).join(" vs ")}
                 </p>
               ))}
             </div>
           )}
-          <button
-            onClick={() => selectMutation.mutate()}
-            disabled={selectMutation.isPending}
-            style={panelBtnStyle("#0e7490", selectMutation.isPending)}
-          >
-            {selectMutation.isPending ? "Selecting..." : "Re-select Finalists"}
-          </button>
         </>
       )}
     </StepBlock>
@@ -503,41 +708,126 @@ function FinalistsPanel({ eventId }: { eventId: string }) {
 
 function AwardsPanel({ eventId, rankings }: { eventId: string; rankings: LiveScoreEntry[] }) {
   const { data: awards = [] } = useTeamAwards(eventId);
+  const { data: event } = useAdminEvent(eventId);
   const assignMutation = useAssignAwards(eventId);
+  const [manualTeamByPrize, setManualTeamByPrize] = useState<Record<string, string>>({});
 
   const hasAwards = awards.length > 0;
-  const top4 = rankings.slice(0, 4);
+  const prizes = event?.prizes ?? [];
+  const rankBasedPrizes = sortRankBasedPrizes(prizes);
+  const manualPrizes = prizes.filter(
+    (p) => resolveAssignmentMode(p.rank, p.assignmentMode) === "MANUAL",
+  );
+  const teamOptions = rankings.map((r) => ({ id: r.teamId, name: r.teamName }));
+
+  const allManualSelected =
+    manualPrizes.length === 0 ||
+    manualPrizes.every((p) => Boolean(manualTeamByPrize[p.id]));
+
+  const handleAssign = () => {
+    assignMutation.mutate({
+      manualAssignments: manualPrizes.map((p) => ({
+        prizeId: p.id,
+        teamId: manualTeamByPrize[p.id],
+      })),
+    });
+  };
 
   return (
     <StepBlock number={3} title="Assign Awards" status={hasAwards ? "done" : "active"}>
       {!hasAwards ? (
         <>
-          <p style={{ fontSize: 12, color: "#8891a5", marginBottom: 8 }}>
-            Preview — will be auto-assigned from final rankings:
-          </p>
-          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 8, fontSize: 11 }}>
-            <tbody>
-              {PRIZE_PREVIEW.map((prize, idx) => (
-                <tr key={prize.label} style={{ borderBottom: "1px solid rgba(198,198,205,0.3)" }}>
-                  <td style={{ padding: "4px 0", color: "#8891a5", width: "40%" }}>{prize.label}</td>
-                  <td style={{ padding: "4px 4px", fontWeight: 500, color: "#0e1528" }}>
-                    {top4[idx]?.teamName ?? "TBD"}
-                  </td>
-                  <td style={{ padding: "4px 0", textAlign: "right", color: "#0e1528" }}>{prize.value}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {prizes.length === 0 ? (
+            <p style={{ fontSize: 12, color: "#dc2626", marginBottom: 8 }}>
+              Configure First / Second / Third prizes on the event before assigning awards.
+            </p>
+          ) : (
+            <>
+              <p style={{ fontSize: 12, color: "#8891a5", marginBottom: 8 }}>
+                Auto from final rankings (RANK_BASED):
+              </p>
+              <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 8, fontSize: 11 }}>
+                <tbody>
+                  {rankBasedPrizes.map((prize, idx) => (
+                    <tr key={prize.id} style={{ borderBottom: "1px solid rgba(198,198,205,0.3)" }}>
+                      <td style={{ padding: "4px 0", color: "#8891a5", width: "40%" }}>
+                        {getPrizeLabel(prize.rank, prize.label)}
+                      </td>
+                      <td style={{ padding: "4px 4px", fontWeight: 500, color: "#0e1528" }}>
+                        {rankings[idx]?.teamName ?? "TBD"}
+                      </td>
+                      <td style={{ padding: "4px 0", textAlign: "right", color: "#0e1528" }}>
+                        {formatPrizeAmount(prize.value)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {manualPrizes.length > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  <p style={{ fontSize: 12, color: "#8891a5", marginBottom: 6 }}>
+                    Manual prizes (pick a team):
+                  </p>
+                  {manualPrizes.map((prize) => (
+                    <div key={prize.id} style={{ marginBottom: 8 }}>
+                      <div
+                        className="flex items-center justify-between"
+                        style={{ fontSize: 11, marginBottom: 4, gap: 4 }}
+                      >
+                        <span style={{ color: "#8891a5" }}>
+                          {getPrizeLabel(prize.rank, prize.label)}
+                        </span>
+                        <span style={{ color: "#0e1528" }}>{formatPrizeAmount(prize.value)}</span>
+                      </div>
+                      <select
+                        value={manualTeamByPrize[prize.id] ?? ""}
+                        onChange={(e) =>
+                          setManualTeamByPrize((prev) => ({
+                            ...prev,
+                            [prize.id]: e.target.value,
+                          }))
+                        }
+                        style={{
+                          width: "100%",
+                          padding: "6px 8px",
+                          fontSize: 12,
+                          border: "1px solid rgba(198,198,205,0.7)",
+                          borderRadius: 6,
+                          backgroundColor: "#fff",
+                        }}
+                      >
+                        <option value="">Select team…</option>
+                        {teamOptions.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
           <button
-            onClick={() => assignMutation.mutate()}
-            disabled={assignMutation.isPending}
-            style={panelBtnStyle("#16a34a", assignMutation.isPending)}
+            onClick={handleAssign}
+            disabled={
+              assignMutation.isPending ||
+              prizes.length === 0 ||
+              !allManualSelected
+            }
+            style={panelBtnStyle(
+              "#16a34a",
+              assignMutation.isPending || prizes.length === 0 || !allManualSelected,
+            )}
           >
             {assignMutation.isPending ? "Assigning..." : "Assign Awards"}
           </button>
           {assignMutation.isError && (
             <p style={{ fontSize: 11, color: "#dc2626", marginTop: 6 }}>
-              Failed to assign. Ensure rankings are recalculated first.
+              {(assignMutation.error as Error)?.message ||
+                "Failed to assign. Ensure rankings are recalculated and prizes are configured."}
             </p>
           )}
         </>
@@ -563,10 +853,14 @@ function AwardsPanel({ eventId, rankings }: { eventId: string; rankings: LiveSco
               className="flex items-center justify-between"
               style={{ fontSize: 12, marginBottom: 4, gap: 4 }}
             >
-              <span style={{ color: "#8891a5", flex: 1 }}>{a.prizeLabel}</span>
-              <span style={{ fontWeight: 500, color: "#0e1528", flex: 1 }}>{a.teamName}</span>
-              <span style={{ color: "#0e1528", whiteSpace: "nowrap" }}>
-                {Number(a.prizeValue).toLocaleString("vi-VN")} ₫
+              <span style={{ color: "#8891a5", flex: 1 }}>
+                {getPrizeLabel(a.prizeRank, a.prizeLabel)}
+              </span>
+              <span style={{ fontWeight: 500, color: "#0e1528", flex: 1 }}>
+                {a.teamName ?? "Unknown team"}
+              </span>
+              <span style={{ color: "#0e1528", textAlign: "right" }}>
+                {formatPrizeAmount(a.prizeValue)}
               </span>
             </div>
           ))}
@@ -672,9 +966,9 @@ function PublishFlowPanel({
 
       {isPreliminary ? (
         board.scoresLocked ? (
-          <FinalistsPanel eventId={eventId} />
+          <AdvanceTeamsPanel eventId={eventId} rankings={fullRankings} />
         ) : (
-          <StepBlock number={2} title="Select Finalists" status="pending" />
+          <StepBlock number={2} title="Advance Teams" status="pending" />
         )
       ) : null}
 

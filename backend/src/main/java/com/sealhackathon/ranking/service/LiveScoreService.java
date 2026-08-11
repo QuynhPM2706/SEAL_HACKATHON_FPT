@@ -10,10 +10,12 @@ import com.sealhackathon.event.dto.snapshot.RoundSnapshot;
 import com.sealhackathon.event.dto.snapshot.TrackSnapshot;
 import com.sealhackathon.event.service.EventPublicService;
 import com.sealhackathon.judging.service.JudgingPublicService;
+import com.sealhackathon.ranking.domain.FinalistSelection;
 import com.sealhackathon.ranking.domain.Ranking;
 import com.sealhackathon.ranking.dto.response.LiveScoreBoard;
 import com.sealhackathon.ranking.dto.response.LiveScoreEntry;
 import com.sealhackathon.ranking.dto.response.TrackInfo;
+import com.sealhackathon.ranking.repository.FinalistSelectionRepository;
 import com.sealhackathon.ranking.repository.PublishedResultRepository;
 import com.sealhackathon.ranking.repository.RankingRepository;
 import com.sealhackathon.submission.dto.snapshot.SubmissionSnapshot;
@@ -28,7 +30,9 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +47,7 @@ public class LiveScoreService {
     private static final int DEFAULT_MAX_SCORE = 100;
 
     private final RankingRepository rankingRepository;
+    private final FinalistSelectionRepository finalistSelectionRepository;
     private final PublishedResultRepository publishedResultRepository;
     private final EventPublicService eventPublicService;
     private final TeamPublicService teamPublicService;
@@ -148,6 +153,12 @@ public class LiveScoreService {
                 .sorted(Comparator.comparingInt(LiveScoreEntry::getRank))
                 .toList();
 
+        // Final has no rankings until judges score it — show the advanced teams instead of an empty board.
+        if (entries.isEmpty() && round.getRoundType() == RoundType.FINAL) {
+            entries = buildFinalistPlaceholders(eventId, teamMap, trackNameMap,
+                    submissionMap, scoreCountMap, assignedJudgesMap, trackId);
+        }
+
         if (trackId != null && round.getRoundType() == RoundType.PRELIMINARY) {
             entries = RankingDisplayHelper.reRankLiveScoreWithinTrack(entries);
         }
@@ -239,6 +250,61 @@ public class LiveScoreService {
                 .judgesAssigned((int) judgesAssigned)
                 .calculatedAt(ranking.getCalculatedAt())
                 .build();
+    }
+
+    /**
+     * Advanced teams awaiting Final scoring: no Ranking rows exist yet, so rank falls back to the
+     * preliminary order and the score column stays empty until judges submit.
+     */
+    private List<LiveScoreEntry> buildFinalistPlaceholders(
+            UUID eventId,
+            Map<UUID, TeamSnapshot> teamMap,
+            Map<UUID, String> trackNameMap,
+            Map<UUID, SubmissionSnapshot> submissionMap,
+            Map<UUID, Integer> scoreCountMap,
+            Map<UUID, Long> assignedJudgesMap,
+            UUID trackId) {
+        List<FinalistSelection> finalists =
+                finalistSelectionRepository.findByEventIdOrderByPreliminaryRankAsc(eventId);
+        if (finalists.isEmpty()) {
+            return List.of();
+        }
+
+        List<LiveScoreEntry> placeholders = new ArrayList<>();
+        int rank = 1;
+        for (FinalistSelection finalist : finalists) {
+            TeamSnapshot team = teamMap.get(finalist.getTeamId());
+            UUID teamTrackId = team != null ? team.getTrackId() : finalist.getTrackId();
+            if (trackId != null && !trackId.equals(teamTrackId)) {
+                continue;
+            }
+
+            SubmissionSnapshot sub = submissionMap.get(finalist.getTeamId());
+            int judgesScored = sub != null ? scoreCountMap.getOrDefault(sub.getId(), 0) : 0;
+            long judgesAssigned = assignedJudgesMap.getOrDefault(finalist.getTeamId(), 0L);
+
+            String scoreStatus;
+            if (sub == null) {
+                scoreStatus = "NOT_SUBMITTED";
+            } else if (judgesScored > 0) {
+                scoreStatus = "PARTIALLY_SCORED";
+            } else {
+                scoreStatus = "WAITING_FOR_SCORE";
+            }
+
+            placeholders.add(LiveScoreEntry.builder()
+                    .teamId(finalist.getTeamId())
+                    .teamName(team != null ? team.getName() : "Unknown")
+                    .trackId(teamTrackId)
+                    .trackName(teamTrackId != null ? trackNameMap.get(teamTrackId) : null)
+                    .finalScore(BigDecimal.ZERO)
+                    .rank(rank++)
+                    .scoreStatus(scoreStatus)
+                    .judgesScored(judgesScored)
+                    .judgesAssigned((int) judgesAssigned)
+                    .build());
+        }
+        return placeholders;
     }
 
     private boolean isRoundScoresLocked(UUID eventId, UUID roundId) {

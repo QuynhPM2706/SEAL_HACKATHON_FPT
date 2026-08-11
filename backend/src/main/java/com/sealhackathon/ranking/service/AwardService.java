@@ -2,14 +2,20 @@ package com.sealhackathon.ranking.service;
 
 import com.sealhackathon.common.exception.BusinessException;
 import com.sealhackathon.common.exception.ResourceNotFoundException;
+import com.sealhackathon.common.enums.UserType;
+import com.sealhackathon.auth.service.AuthPublicService;
 import com.sealhackathon.event.domain.HackathonEvent;
 import com.sealhackathon.event.domain.Prize;
 import com.sealhackathon.event.domain.Round;
+import com.sealhackathon.event.domain.enums.PrizeAssignmentMode;
 import com.sealhackathon.event.domain.enums.PrizeRank;
 import com.sealhackathon.event.domain.enums.RoundType;
+import com.sealhackathon.ranking.dto.request.AssignAwardsRequest;
+import com.sealhackathon.ranking.dto.request.ManualPrizeAssignmentRequest;
 import com.sealhackathon.event.repository.HackathonEventRepository;
 import com.sealhackathon.event.repository.PrizeRepository;
 import com.sealhackathon.event.repository.RoundRepository;
+import com.sealhackathon.judging.service.JudgingPublicService;
 import com.sealhackathon.ranking.domain.ParticipationCertificate;
 import com.sealhackathon.ranking.domain.Ranking;
 import com.sealhackathon.ranking.domain.TeamAward;
@@ -19,12 +25,15 @@ import com.sealhackathon.ranking.dto.response.ParticipationCertificateSummaryRes
 import com.sealhackathon.ranking.dto.response.TeamAwardResponse;
 import com.sealhackathon.ranking.dto.response.UserAchievementResponse;
 import com.sealhackathon.ranking.repository.ParticipationCertificateRepository;
+import com.sealhackathon.ranking.repository.PublishedResultRepository;
 import com.sealhackathon.ranking.repository.RankingRepository;
 import com.sealhackathon.ranking.repository.TeamAwardRepository;
+import com.sealhackathon.team.domain.Team;
 import com.sealhackathon.team.domain.TeamMember;
 import com.sealhackathon.team.domain.enums.TeamStatus;
 import com.sealhackathon.team.dto.snapshot.TeamSnapshot;
 import com.sealhackathon.team.repository.TeamMemberRepository;
+import com.sealhackathon.team.repository.TeamRepository;
 import com.sealhackathon.team.service.TeamPublicService;
 import com.sealhackathon.user.dto.snapshot.UserSnapshot;
 import com.sealhackathon.user.service.UserPublicService;
@@ -37,8 +46,10 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -47,23 +58,40 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AwardService {
 
-    private static final List<PrizeRank> AWARD_ORDER = List.of(
+    private static final List<PrizeRank> RANK_BASED_ORDER = List.of(
             PrizeRank.FIRST, PrizeRank.SECOND, PrizeRank.THIRD, PrizeRank.CONSOLATION);
 
     private final TeamAwardRepository teamAwardRepository;
     private final ParticipationCertificateRepository participationCertificateRepository;
     private final RankingRepository rankingRepository;
+    private final PublishedResultRepository publishedResultRepository;
     private final RoundRepository roundRepository;
     private final HackathonEventRepository eventRepository;
     private final PrizeRepository prizeRepository;
     private final TeamPublicService teamPublicService;
     private final TeamMemberRepository teamMemberRepository;
+    private final TeamRepository teamRepository;
     private final UserPublicService userPublicService;
+    private final JudgingPublicService judgingPublicService;
+    private final AuthPublicService authPublicService;
 
     @Transactional
     public AwardAssignmentResultResponse assignAwardsFromFinalRanking(UUID eventId) {
+        return assignAwardsFromFinalRanking(eventId, AssignAwardsRequest.builder().build());
+    }
+
+    @Transactional
+    public AwardAssignmentResultResponse assignAwardsFromFinalRanking(
+            UUID eventId, AssignAwardsRequest request) {
         eventRepository.findById(eventId)
                 .orElseThrow(() -> new ResourceNotFoundException("Event", "id", eventId));
+
+        List<Prize> prizes = prizeRepository.findByHackathonEventId(eventId);
+        if (prizes == null || prizes.isEmpty()) {
+            throw new BusinessException(
+                    "Configure prizes before assigning awards",
+                    HttpStatus.BAD_REQUEST) {};
+        }
 
         Round finalRound = roundRepository.findByHackathonEventIdOrderByRoundNumberAsc(eventId).stream()
                 .filter(r -> r.getRoundType() == RoundType.FINAL)
@@ -71,42 +99,109 @@ public class AwardService {
                 .orElseGet(() -> {
                     List<Round> rounds = roundRepository.findByHackathonEventIdOrderByRoundNumberAsc(eventId);
                     if (rounds.isEmpty()) {
-                        throw new BusinessException("No rounds configured", HttpStatus.BAD_REQUEST);
+                        throw new BusinessException("No rounds configured", HttpStatus.BAD_REQUEST) {};
                     }
                     return rounds.get(rounds.size() - 1);
                 });
 
+        if (finalRound.getRoundType() == RoundType.FINAL
+                && !publishedResultRepository.existsByRoundId(finalRound.getId())) {
+            throw new BusinessException(
+                    "Publish Final results before assigning awards",
+                    HttpStatus.BAD_REQUEST) {};
+        }
+
         int latestVersion = rankingRepository.findMaxVersionByRoundId(finalRound.getId());
         if (latestVersion == 0) {
-            throw new BusinessException("Final rankings not yet calculated", HttpStatus.BAD_REQUEST);
+            throw new BusinessException("Final rankings not yet calculated", HttpStatus.BAD_REQUEST) {};
         }
 
         List<Ranking> rankings = rankingRepository
                 .findByRoundIdAndVersionOrderByRankAsc(finalRound.getId(), latestVersion);
 
-        List<Prize> prizes = prizeRepository.findByHackathonEventId(eventId);
-        Map<PrizeRank, Prize> prizeByRank = prizes.stream()
-                .collect(Collectors.toMap(Prize::getRank, Function.identity(), (a, b) -> a));
+        List<Prize> rankBasedPrizes = prizes.stream()
+                .filter(p -> resolveMode(p) == PrizeAssignmentMode.RANK_BASED)
+                .sorted(Comparator.comparingInt(p -> rankBasedOrderIndex(p.getRank())))
+                .toList();
+
+        List<Prize> manualPrizes = prizes.stream()
+                .filter(p -> resolveMode(p) == PrizeAssignmentMode.MANUAL)
+                .toList();
+
+        List<ManualPrizeAssignmentRequest> manualAssignments =
+                request != null && request.getManualAssignments() != null
+                        ? request.getManualAssignments()
+                        : List.of();
+        Map<UUID, UUID> manualTeamByPrize = new HashMap<>();
+        for (ManualPrizeAssignmentRequest assignment : manualAssignments) {
+            if (assignment.getPrizeId() == null || assignment.getTeamId() == null) {
+                throw new BusinessException(
+                        "Each manual assignment requires prizeId and teamId",
+                        HttpStatus.BAD_REQUEST) {};
+            }
+            if (manualTeamByPrize.put(assignment.getPrizeId(), assignment.getTeamId()) != null) {
+                throw new BusinessException(
+                        "Duplicate manual assignment for the same prize",
+                        HttpStatus.BAD_REQUEST) {};
+            }
+        }
+        for (Prize manualPrize : manualPrizes) {
+            if (!manualTeamByPrize.containsKey(manualPrize.getId())) {
+                throw new BusinessException(
+                        "Manual prize \"" + prizeTitle(manualPrize)
+                                + "\" requires a team assignment",
+                        HttpStatus.BAD_REQUEST) {};
+            }
+        }
+        for (UUID prizeId : manualTeamByPrize.keySet()) {
+            boolean known = manualPrizes.stream().anyMatch(p -> p.getId().equals(prizeId));
+            if (!known) {
+                throw new BusinessException(
+                        "manualAssignments contains a prize that is not MANUAL for this event",
+                        HttpStatus.BAD_REQUEST) {};
+            }
+        }
+
+        Set<UUID> eventTeamIds = teamRepository.findByEventId(eventId).stream()
+                .map(Team::getId)
+                .collect(Collectors.toCollection(HashSet::new));
 
         teamAwardRepository.deleteByEventId(eventId);
         teamAwardRepository.flush();
 
         List<TeamAwardResponse> teamAwards = new ArrayList<>();
         LocalDateTime now = LocalDateTime.now();
+        Set<UUID> usedRankBasedTeams = new HashSet<>();
 
-        for (int i = 0; i < Math.min(AWARD_ORDER.size(), rankings.size()); i++) {
-            PrizeRank rank = AWARD_ORDER.get(i);
-            Prize prize = prizeByRank.get(rank);
-            if (prize == null) continue;
-
-            Ranking ranking = rankings.get(i);
+        for (int i = 0; i < rankBasedPrizes.size() && i < rankings.size(); i++) {
+            Prize prize = rankBasedPrizes.get(i);
+            UUID teamId = rankings.get(i).getTeamId();
+            if (!usedRankBasedTeams.add(teamId)) {
+                continue;
+            }
             TeamAward award = teamAwardRepository.save(TeamAward.builder()
                     .eventId(eventId)
-                    .teamId(ranking.getTeamId())
+                    .teamId(teamId)
                     .prizeId(prize.getId())
                     .awardedAt(now)
                     .build());
             teamAwards.add(toTeamAwardResponse(award, prize));
+        }
+
+        for (Prize manualPrize : manualPrizes) {
+            UUID teamId = manualTeamByPrize.get(manualPrize.getId());
+            if (!eventTeamIds.contains(teamId)) {
+                throw new BusinessException(
+                        "Team does not belong to this event",
+                        HttpStatus.BAD_REQUEST) {};
+            }
+            TeamAward award = teamAwardRepository.save(TeamAward.builder()
+                    .eventId(eventId)
+                    .teamId(teamId)
+                    .prizeId(manualPrize.getId())
+                    .awardedAt(now)
+                    .build());
+            teamAwards.add(toTeamAwardResponse(award, manualPrize));
         }
 
         List<ParticipationCertificateResponse> participationCertificates =
@@ -119,8 +214,40 @@ public class AwardService {
                 .build();
     }
 
+    private static PrizeAssignmentMode resolveMode(Prize prize) {
+        if (prize.getAssignmentMode() != null) {
+            return prize.getAssignmentMode();
+        }
+        return prize.getRank() == PrizeRank.OTHER
+                ? PrizeAssignmentMode.MANUAL
+                : PrizeAssignmentMode.RANK_BASED;
+    }
+
+    private static int rankBasedOrderIndex(PrizeRank rank) {
+        if (rank == null) {
+            return 99;
+        }
+        int idx = RANK_BASED_ORDER.indexOf(rank);
+        return idx >= 0 ? idx : 98;
+    }
+
     @Transactional(readOnly = true)
     public List<TeamAwardResponse> getAwards(UUID eventId) {
+        if (!canViewerSeeAwards(eventId)) {
+            return List.of();
+        }
+        return listAwardsUngated(eventId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<TeamAwardResponse> getPublicAwards(UUID eventId) {
+        if (!isStudentResultsVisible(eventId)) {
+            return List.of();
+        }
+        return listAwardsUngated(eventId);
+    }
+
+    private List<TeamAwardResponse> listAwardsUngated(UUID eventId) {
         List<Prize> prizes = prizeRepository.findByHackathonEventId(eventId);
         Map<UUID, Prize> prizeMap = prizes.stream()
                 .collect(Collectors.toMap(Prize::getId, Function.identity()));
@@ -149,30 +276,49 @@ public class AwardService {
     @Transactional(readOnly = true)
     public List<UserAchievementResponse> getUserAchievements(UUID userId) {
         List<TeamMember> memberships = teamMemberRepository.findByUserId(userId);
-        Map<UUID, String> teamNames = memberships.stream()
-                .collect(Collectors.toMap(
-                        member -> member.getTeam().getId(),
-                        member -> member.getTeam().getName(),
-                        (first, ignored) -> first));
+        Set<UUID> memberTeamIds = memberships.stream()
+                .map(member -> member.getTeam().getId())
+                .collect(Collectors.toCollection(HashSet::new));
 
-        List<TeamAward> awards = teamNames.isEmpty()
+        List<TeamAward> awards = memberTeamIds.isEmpty()
                 ? List.of()
-                : teamAwardRepository.findByTeamIdInOrderByAwardedAtDesc(teamNames.keySet());
+                : teamAwardRepository.findByTeamIdInOrderByAwardedAtDesc(memberTeamIds);
         List<ParticipationCertificate> certificates =
                 participationCertificateRepository.findByUserIdOrderByIssuedAtDesc(userId);
+
+        // Resolve team names from teams table so certificates/awards still show
+        // after the student leaves or membership rows are missing.
+        Set<UUID> teamIds = new HashSet<>(memberTeamIds);
+        awards.forEach(award -> teamIds.add(award.getTeamId()));
+        certificates.forEach(certificate -> {
+            if (certificate.getTeamId() != null) {
+                teamIds.add(certificate.getTeamId());
+            }
+        });
+        Map<UUID, String> teamNames = teamIds.isEmpty()
+                ? Map.of()
+                : teamRepository.findAllById(teamIds).stream()
+                        .collect(Collectors.toMap(Team::getId, Team::getName, (first, ignored) -> first));
 
         List<UUID> eventIds = new ArrayList<>();
         awards.forEach(award -> eventIds.add(award.getEventId()));
         certificates.forEach(certificate -> eventIds.add(certificate.getEventId()));
-        Map<UUID, String> eventNames = eventRepository.findAllById(eventIds).stream()
+        Map<UUID, HackathonEvent> eventsById = eventRepository.findAllById(eventIds).stream()
+                .collect(Collectors.toMap(HackathonEvent::getId, Function.identity()));
+        Map<UUID, String> eventNames = eventsById.values().stream()
                 .collect(Collectors.toMap(HackathonEvent::getId, HackathonEvent::getName));
 
         Map<UUID, Prize> prizes = new HashMap<>();
         prizeRepository.findAllById(awards.stream().map(TeamAward::getPrizeId).toList())
                 .forEach(prize -> prizes.put(prize.getId(), prize));
 
+        boolean staffViewer = isStaffViewer();
+
         List<UserAchievementResponse> achievements = new ArrayList<>();
         for (TeamAward award : awards) {
+            if (!staffViewer && !isStudentResultsVisible(eventsById.get(award.getEventId()))) {
+                continue;
+            }
             Prize prize = prizes.get(award.getPrizeId());
             achievements.add(UserAchievementResponse.builder()
                     .id(award.getId())
@@ -188,6 +334,9 @@ public class AwardService {
                     .build());
         }
         for (ParticipationCertificate certificate : certificates) {
+            if (!staffViewer && !isStudentResultsVisible(eventsById.get(certificate.getEventId()))) {
+                continue;
+            }
             achievements.add(UserAchievementResponse.builder()
                     .id(certificate.getId())
                     .type("PARTICIPATION_CERTIFICATE")
@@ -210,6 +359,10 @@ public class AwardService {
 
     @Transactional(readOnly = true)
     public ParticipationCertificateResponse getMyParticipationCertificate(UUID eventId, UUID userId) {
+        if (!isStudentResultsVisible(eventId) && !isStaffViewer()) {
+            throw new ResourceNotFoundException(
+                    "Participation certificate", "eventId/userId", eventId + "/" + userId);
+        }
         eventRepository.findById(eventId)
                 .orElseThrow(() -> new ResourceNotFoundException("Event", "id", eventId));
 
@@ -226,10 +379,54 @@ public class AwardService {
         eventRepository.findById(eventId)
                 .orElseThrow(() -> new ResourceNotFoundException("Event", "id", eventId));
 
+        if (!isStudentResultsVisible(eventId) && !isStaffViewer()) {
+            return ParticipationCertificateSummaryResponse.builder()
+                    .eventId(eventId)
+                    .issuedCount(0)
+                    .build();
+        }
+
         return ParticipationCertificateSummaryResponse.builder()
                 .eventId(eventId)
                 .issuedCount(participationCertificateRepository.countByEventId(eventId))
                 .build();
+    }
+
+    /**
+     * Students see Results & Awards when Final results are published, the
+     * leaderboard is public, and there are no active score-deviation reviews.
+     */
+    boolean isStudentResultsVisible(UUID eventId) {
+        return eventRepository.findById(eventId)
+                .map(this::isStudentResultsVisible)
+                .orElse(false);
+    }
+
+    boolean isStudentResultsVisible(HackathonEvent event) {
+        if (event == null || !event.isLeaderboardPublic()) {
+            return false;
+        }
+        if (judgingPublicService.hasActiveScoreReviews(event.getId())) {
+            return false;
+        }
+        return roundRepository.findByHackathonEventIdOrderByRoundNumberAsc(event.getId()).stream()
+                .filter(r -> r.getRoundType() == RoundType.FINAL)
+                .findFirst()
+                .map(r -> publishedResultRepository.existsByRoundId(r.getId()))
+                .orElse(false);
+    }
+
+    private boolean canViewerSeeAwards(UUID eventId) {
+        return isStaffViewer() || isStudentResultsVisible(eventId);
+    }
+
+    private boolean isStaffViewer() {
+        try {
+            UserType role = authPublicService.getCurrentUserRole();
+            return role == UserType.SYSTEM_ADMIN || role == UserType.EVENT_COORDINATOR;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private List<ParticipationCertificateResponse> issueParticipationCertificates(
@@ -256,7 +453,8 @@ public class AwardService {
 
     private int rankOrder(PrizeRank rank) {
         if (rank == null) return 99;
-        int idx = AWARD_ORDER.indexOf(rank);
+        if (rank == PrizeRank.OTHER) return 50;
+        int idx = RANK_BASED_ORDER.indexOf(rank);
         return idx >= 0 ? idx : 99;
     }
 
@@ -268,7 +466,8 @@ public class AwardService {
             case FIRST -> "First Prize";
             case SECOND -> "Second Prize";
             case THIRD -> "Third Prize";
-            case CONSOLATION -> "Consolation Prize";
+            case CONSOLATION -> "Encouragement Prize";
+            case OTHER -> "Special Prize";
         };
     }
 

@@ -14,4 +14,9 @@ public class FinalistSelectionSummaryResponse {
     private int selectedCount;
     private int targetCount;
     private boolean penaltyEvaluationRequired;
+    /** PER_GROUP | PER_TRACK | GLOBAL | MANUAL */
+    private String bucketScope;
+    /** Human label for UI, e.g. "per group", "per track", "overall". */
+    private String bucketLabel;
+    private Integer topN;
 }

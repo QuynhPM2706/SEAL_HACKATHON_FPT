@@ -2,12 +2,15 @@ import type { ContestedSlotType, FinalistSelectionMethod } from "./finalist.api"
 
 const SELECTION_METHOD_LABELS: Record<FinalistSelectionMethod, string> = {
   TOP_PER_TRACK: "Top per track",
+  TOP_PER_GROUP: "Top per group",
   OVERFLOW_FILL: "Finals slot overflow fill",
   PENALTY_PENDING: "Pending OC penalty review",
+  MANUAL: "Manually advanced",
 };
 
 const CONTESTED_SLOT_LABELS: Record<ContestedSlotType, string> = {
   PER_TRACK_CUTOFF: "Tie at Top-N within track",
+  PER_GROUP_CUTOFF: "Tie at Top-N within group",
   OVERFLOW_FILL: "Tie when filling finals slots",
 };
 

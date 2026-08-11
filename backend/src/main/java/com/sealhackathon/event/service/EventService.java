@@ -17,7 +17,9 @@ import com.sealhackathon.event.domain.ScoringTemplateCriterion;
 import com.sealhackathon.event.domain.Track;
 import com.sealhackathon.event.domain.enums.CompetitionFormat;
 import com.sealhackathon.event.domain.enums.EventStatus;
+import com.sealhackathon.event.domain.enums.PrizeAssignmentMode;
 import com.sealhackathon.event.domain.enums.PrizeRank;
+import com.sealhackathon.event.domain.enums.RoundType;
 import com.sealhackathon.event.dto.request.CreateEventRequest;
 import com.sealhackathon.event.dto.request.PrizeRequest;
 import com.sealhackathon.event.dto.request.UpdateEventRequest;
@@ -33,7 +35,9 @@ import com.sealhackathon.event.event.EventCreatedEvent;
 import com.sealhackathon.event.template.SealSpring2026Template;
 import com.sealhackathon.event.repository.EventMentorAssignmentRepository;
 import com.sealhackathon.event.repository.HackathonEventRepository;
+import com.sealhackathon.event.repository.RoundRepository;
 import com.sealhackathon.event.repository.ScoringTemplateRepository;
+import com.sealhackathon.ranking.repository.PublishedResultRepository;
 import com.sealhackathon.team.repository.TeamRepository;
 import com.sealhackathon.team.service.TeamService;
 import com.sealhackathon.user.dto.snapshot.UserSnapshot;
@@ -88,6 +92,9 @@ public class EventService {
     private final EventStatusResolver eventStatusResolver;
     private final EventFinder eventFinder;
     private final EventOwnershipGuard eventOwnershipGuard;
+    private final com.sealhackathon.judging.service.JudgingPublicService judgingPublicService;
+    private final RoundRepository roundRepository;
+    private final PublishedResultRepository publishedResultRepository;
 
     @Transactional
     public EventResponse createEvent(CreateEventRequest request) {
@@ -195,9 +202,9 @@ public class EventService {
         enforceOwnership(event);
 
         EventStatus liveStatus = resolveStatus(event);
-        if (liveStatus == EventStatus.ACTIVE || liveStatus == EventStatus.COMPLETED) {
+        if (liveStatus == EventStatus.COMPLETED || liveStatus == EventStatus.CANCELLED) {
             throw new BusinessException(
-                    "Cannot modify event during or after the competition period.",
+                    "Cannot modify a completed or cancelled event.",
                     HttpStatus.BAD_REQUEST) {};
         }
 
@@ -213,7 +220,7 @@ public class EventService {
         String oldName = event.getName();
 
         event.setName(request.getName());
-        event.setSeason(SeasonUtils.normalize(request.getSeason()));
+        event.setSeason(SeasonUtils.requireValidSeason(request.getSeason()));
         event.setYear(request.getYear());
         event.setStartDate(request.getStartDate());
         event.setEndDate(request.getEndDate());
@@ -371,6 +378,13 @@ public class EventService {
         validateStatusTransition(event, target);
         if (target == EventStatus.SCORING) {
             judgeAssignmentService.assertEventReadyForScoring(eventId);
+        }
+        if (target == EventStatus.COMPLETED
+                && judgingPublicService.hasActiveScoreReviews(eventId)) {
+            throw new BusinessException(
+                    "Cannot complete the event while score deviation reviews are still open or approved. "
+                            + "Resolve all score reviews first so the judging panel reaches consensus.",
+                    HttpStatus.BAD_REQUEST);
         }
 
         String oldStatus = event.getStatus().name();
@@ -535,17 +549,18 @@ public class EventService {
 
     private void assertEventMutable(HackathonEvent event) {
         EventStatus liveStatus = resolveStatus(event);
-        if (liveStatus == EventStatus.ACTIVE || liveStatus == EventStatus.COMPLETED) {
+        if (liveStatus == EventStatus.COMPLETED || liveStatus == EventStatus.CANCELLED) {
             throw new BusinessException(
-                    "Cannot modify event during or after the competition period.",
+                    "Cannot modify a completed or cancelled event.",
                     HttpStatus.BAD_REQUEST) {};
         }
     }
 
     @Transactional(readOnly = true)
     public Page<EventResponse> listEvents(List<EventStatus> statuses, String season, Integer year, Pageable pageable) {
+        String normalizedSeason = normalizeSeasonFilter(season);
         if (statuses != null && !statuses.isEmpty()) {
-            return listEventsByResolvedStatuses(statuses, season, year, pageable);
+            return listEventsByResolvedStatuses(statuses, normalizedSeason, year, pageable);
         }
 
         UserType role = authPublicService.getCurrentUserRole();
@@ -553,9 +568,9 @@ public class EventService {
 
         if (role == UserType.EVENT_COORDINATOR) {
             page = eventRepository.findByOwnerUserIdAndFilters(
-                    authPublicService.getCurrentUserId(), null, season, year, pageable);
+                    authPublicService.getCurrentUserId(), null, normalizedSeason, year, pageable);
         } else {
-            page = eventRepository.findByFilters(null, season, year, pageable);
+            page = eventRepository.findByFilters(null, normalizedSeason, year, pageable);
         }
 
         return page.map(this::toResponse);
@@ -595,6 +610,29 @@ public class EventService {
      */
     public EventStatus resolveStatus(HackathonEvent event) {
         return eventStatusResolver.resolveStatus(event);
+    }
+
+    /**
+     * Students see Ranking / Results & Awards after Final results are published,
+     * the leaderboard is public, and score-deviation reviews are closed.
+     * Event COMPLETED is not required (feedback still requires COMPLETED separately).
+     */
+    boolean isStudentResultsVisible(HackathonEvent event, boolean hasActiveScoreReviews) {
+        if (event == null || hasActiveScoreReviews || !event.isLeaderboardPublic()) {
+            return false;
+        }
+        return hasFinalResultsPublished(event.getId());
+    }
+
+    private boolean hasFinalResultsPublished(UUID eventId) {
+        if (eventId == null) {
+            return false;
+        }
+        return roundRepository.findByHackathonEventIdOrderByRoundNumberAsc(eventId).stream()
+                .filter(r -> r.getRoundType() == RoundType.FINAL)
+                .findFirst()
+                .map(r -> publishedResultRepository.existsByRoundId(r.getId()))
+                .orElse(false);
     }
 
     private void enforceOwnership(HackathonEvent event) {
@@ -638,6 +676,13 @@ public class EventService {
         }
     }
 
+    private static String normalizeSeasonFilter(String season) {
+        if (season == null || season.isBlank()) {
+            return null;
+        }
+        return SeasonUtils.normalize(season);
+    }
+
     private void validateDateRange(java.time.LocalDate start, java.time.LocalDate end) {
         if (end.isBefore(start)) {
             throw new BusinessException("End date must be on or after start date", HttpStatus.BAD_REQUEST) {};
@@ -672,17 +717,50 @@ public class EventService {
     }
 
     private void validatePrizes(List<PrizeRequest> prizes) {
+        if (prizes == null || prizes.isEmpty()) {
+            return;
+        }
+
+        boolean hasFirst = false;
+        boolean hasSecond = false;
+        boolean hasThird = false;
         Map<String, Map<PrizeRank, Long>> grouped = new HashMap<>();
 
         for (PrizeRequest prize : prizes) {
-            String groupKey = prize.getTrackIndex() != null
-                    ? "track-" + prize.getTrackIndex()
-                    : "shared";
-            Long amount = PrizeAmountUtils.parsePrizeAmount(prize.getValue());
-            if (amount == null || prize.getRank() == PrizeRank.CONSOLATION) {
-                continue;
+            if (prize.getRank() == null) {
+                throw new BusinessException("Prize rank is required", HttpStatus.BAD_REQUEST) {};
             }
-            grouped.computeIfAbsent(groupKey, k -> new HashMap<>()).put(prize.getRank(), amount);
+            Long amount = PrizeAmountUtils.parsePrizeAmount(prize.getValue());
+            if (amount == null || amount <= 0) {
+                throw new BusinessException(
+                        "Prize amount must be a positive number (VND)",
+                        HttpStatus.BAD_REQUEST) {};
+            }
+            if (prize.getRank() == PrizeRank.OTHER
+                    && (prize.getLabel() == null || prize.getLabel().isBlank())) {
+                throw new BusinessException(
+                        "Other (manual) prizes require a name/label",
+                        HttpStatus.BAD_REQUEST) {};
+            }
+
+            if (prize.getRank() == PrizeRank.FIRST) hasFirst = true;
+            if (prize.getRank() == PrizeRank.SECOND) hasSecond = true;
+            if (prize.getRank() == PrizeRank.THIRD) hasThird = true;
+
+            if (prize.getRank() == PrizeRank.FIRST
+                    || prize.getRank() == PrizeRank.SECOND
+                    || prize.getRank() == PrizeRank.THIRD) {
+                String groupKey = prize.getTrackIndex() != null
+                        ? "track-" + prize.getTrackIndex()
+                        : "shared";
+                grouped.computeIfAbsent(groupKey, k -> new HashMap<>()).put(prize.getRank(), amount);
+            }
+        }
+
+        if (!hasFirst || !hasSecond || !hasThird) {
+            throw new BusinessException(
+                    "First, Second, and Third prizes are required",
+                    HttpStatus.BAD_REQUEST) {};
         }
 
         for (Map.Entry<String, Map<PrizeRank, Long>> entry : grouped.entrySet()) {
@@ -712,7 +790,23 @@ public class EventService {
                 .value(request.getValue())
                 .quantity(request.getQuantity())
                 .label(normalizePrizeLabel(request))
+                .assignmentMode(resolveAssignmentMode(request))
                 .build();
+    }
+
+    private PrizeAssignmentMode resolveAssignmentMode(PrizeRequest request) {
+        if (request.getRank() == PrizeRank.OTHER) {
+            return PrizeAssignmentMode.MANUAL;
+        }
+        if (request.getRank() == PrizeRank.FIRST
+                || request.getRank() == PrizeRank.SECOND
+                || request.getRank() == PrizeRank.THIRD
+                || request.getRank() == PrizeRank.CONSOLATION) {
+            return PrizeAssignmentMode.RANK_BASED;
+        }
+        return request.getAssignmentMode() != null
+                ? request.getAssignmentMode()
+                : PrizeAssignmentMode.RANK_BASED;
     }
 
     private String normalizePrizeLabel(PrizeRequest request) {
@@ -779,6 +873,9 @@ public class EventService {
                 ? 0
                 : (int) teamRepository.countByEventIdAndStatusNot(
                         eventId, com.sealhackathon.team.domain.enums.TeamStatus.DISBANDED);
+        boolean hasActiveScoreReviews = eventId != null
+                && judgingPublicService.hasActiveScoreReviews(eventId);
+        boolean studentResultsVisible = isStudentResultsVisible(event, hasActiveScoreReviews);
 
         return EventResponse.builder()
                 .id(event.getId())
@@ -790,6 +887,10 @@ public class EventService {
                 .registrationDeadline(event.getRegistrationDeadline())
                 .registrationOpenDate(event.getRegistrationOpenDate())
                 .status(resolveStatus(event))
+                .staffCompleted(event.getStatus() == EventStatus.COMPLETED)
+                .leaderboardPublic(event.isLeaderboardPublic())
+                .hasActiveScoreReviews(hasActiveScoreReviews)
+                .studentResultsVisible(studentResultsVisible)
                 .description(event.getDescription())
                 .location(event.getLocation())
                 .format(event.getFormat())
@@ -828,6 +929,9 @@ public class EventService {
                                 .value(p.getValue())
                                 .quantity(p.getQuantity())
                                 .label(p.getLabel())
+                                .assignmentMode(p.getAssignmentMode() != null
+                                        ? p.getAssignmentMode()
+                                        : PrizeAssignmentMode.RANK_BASED)
                                 .build())
                         .toList())
                 .honoredGuests(event.getHonoredGuests().stream()

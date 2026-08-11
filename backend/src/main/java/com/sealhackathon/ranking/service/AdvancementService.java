@@ -201,6 +201,38 @@ public class AdvancementService {
                 .toList();
     }
 
+    /**
+     * Persist ADVANCED / ELIMINATED from an explicit set of team IDs (manual / Top-N confirm).
+     */
+    @Transactional
+    public List<AdvancementResponse> syncAdvancements(UUID roundId, Set<UUID> advancedTeamIds) {
+        int latestVersion = rankingRepository.findMaxVersionByRoundId(roundId);
+        List<Ranking> rankings = rankingRepository
+                .findByRoundIdAndVersionOrderByRankAsc(roundId, latestVersion);
+
+        advancementRepository.deleteByRoundId(roundId);
+        advancementRepository.flush();
+
+        List<Advancement> advancements = new ArrayList<>();
+        for (Ranking r : rankings) {
+            AdvancementStatus status = advancedTeamIds.contains(r.getTeamId())
+                    ? AdvancementStatus.ADVANCED
+                    : AdvancementStatus.ELIMINATED;
+            advancements.add(Advancement.builder()
+                    .teamId(r.getTeamId())
+                    .roundId(roundId)
+                    .status(status)
+                    .build());
+        }
+        advancements = advancementRepository.saveAll(advancements);
+
+        Map<UUID, Ranking> rankingMap = rankings.stream()
+                .collect(Collectors.toMap(Ranking::getTeamId, r -> r));
+        return advancements.stream()
+                .map(a -> toResponse(a, rankingMap.get(a.getTeamId())))
+                .toList();
+    }
+
     private AdvancementResponse toResponse(Advancement a, Ranking ranking) {
         TeamSnapshot team = teamPublicService.getTeam(a.getTeamId()).orElse(null);
 
