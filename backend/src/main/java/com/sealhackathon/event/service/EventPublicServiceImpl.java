@@ -1,6 +1,7 @@
 package com.sealhackathon.event.service;
 
 import com.sealhackathon.common.exception.ResourceNotFoundException;
+import com.sealhackathon.common.util.SeasonUtils;
 import com.sealhackathon.event.domain.HackathonEvent;
 import com.sealhackathon.event.domain.Round;
 import com.sealhackathon.event.domain.enums.EventStatus;
@@ -160,6 +161,14 @@ public class EventPublicServiceImpl implements EventPublicService {
 
     @Override
     @Transactional(readOnly = true)
+    public boolean isStaffCompleted(UUID eventId) {
+        return eventRepository.findById(eventId)
+                .map(e -> e.getStatus() == EventStatus.COMPLETED)
+                .orElse(false);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public UUID getEventIdByRoundId(UUID roundId) {
         return roundRepository.findById(roundId)
                 .map(r -> r.getHackathonEvent().getId())
@@ -188,7 +197,7 @@ public class EventPublicServiceImpl implements EventPublicService {
         return EventSnapshot.builder()
                 .id(event.getId())
                 .name(event.getName())
-                .season(event.getSeason())
+                .season(SeasonUtils.normalize(event.getSeason()))
                 .year(event.getYear())
                 .startDate(event.getStartDate())
                 .endDate(event.getEndDate())
@@ -200,6 +209,7 @@ public class EventPublicServiceImpl implements EventPublicService {
                 .semesterMax(event.getSemesterMax())
                 .leaderboardPublic(event.isLeaderboardPublic())
                 .scoringTemplateId(event.getScoringTemplateId())
+                .scoreScaleMax(event.getScoreScaleMax() != null ? event.getScoreScaleMax() : 100)
                 .tiebreakerCriteria(event.getTiebreakerCriteria())
                 .tiebreakerCriterionIds(List.copyOf(event.getTiebreakerCriterionIds()))
                 .build();

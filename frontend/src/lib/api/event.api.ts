@@ -11,7 +11,8 @@ import type { CreateRoundRequest } from "./round.api";
 
 // ═══ Types ═══
 
-export type PrizeRank = "FIRST" | "SECOND" | "THIRD" | "CONSOLATION";
+export type PrizeRank = "FIRST" | "SECOND" | "THIRD" | "CONSOLATION" | "OTHER";
+export type PrizeAssignmentMode = "RANK_BASED" | "MANUAL";
 
 export interface PrizeResponse {
   id: string;
@@ -20,6 +21,7 @@ export interface PrizeResponse {
   value: string;
   quantity: number;
   label?: string | null;
+  assignmentMode?: PrizeAssignmentMode | null;
 }
 
 export interface HonoredGuestResponse {
@@ -43,6 +45,14 @@ export interface EventResponse {
   registrationDeadline: string;
   registrationOpenDate: string | null;
   status: EventStatus;
+  /** Admin/coordinator set sticky COMPLETED (not only end-date derived). */
+  staffCompleted?: boolean;
+  /** Admin/coordinator made results/leaderboard public. */
+  leaderboardPublic?: boolean;
+  /** Score-deviation reviews still OPEN or APPROVED. */
+  hasActiveScoreReviews?: boolean;
+  /** Students may see Ranking / Results & Awards after Final is published + public. */
+  studentResultsVisible?: boolean;
   description: string | null;
   location: string | null;
   format: string;
@@ -78,6 +88,7 @@ export interface PrizeRequest {
   value: string;
   quantity: number;
   label?: string;
+  assignmentMode?: PrizeAssignmentMode;
 }
 
 export interface HonoredGuestRequest {

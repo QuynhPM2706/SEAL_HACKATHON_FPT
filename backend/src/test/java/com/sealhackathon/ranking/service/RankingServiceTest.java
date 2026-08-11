@@ -40,6 +40,8 @@ class RankingServiceTest {
     @Mock private AdvancementService advancementService;
     @Mock private TeamPublicService teamPublicService;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private com.sealhackathon.judging.service.JudgingPublicService judgingPublicService;
+    @Mock private com.sealhackathon.event.service.EventPublicService eventPublicService;
 
     @InjectMocks private RankingService rankingService;
 
@@ -51,6 +53,7 @@ class RankingServiceTest {
         UUID publisherId = UUID.randomUUID();
 
         when(publishedResultRepository.existsByRoundId(roundId)).thenReturn(false);
+        when(judgingPublicService.hasActiveScoreReviewsForRound(roundId)).thenReturn(false);
         when(rankingRepository.findMaxVersionByRoundId(roundId)).thenReturn(1);
         when(advancementService.determineAdvancements(roundId)).thenReturn(List.of());
         when(publishedResultRepository.save(any(PublishedResult.class))).thenAnswer(i -> {
@@ -60,6 +63,11 @@ class RankingServiceTest {
         });
         when(rankingRepository.findByRoundIdAndVersionOrderByRankAsc(roundId, 1))
                 .thenReturn(List.of());
+        Round prelim = Round.builder()
+                .roundType(RoundType.PRELIMINARY)
+                .build();
+        prelim.setId(roundId);
+        when(roundRepository.findById(roundId)).thenReturn(Optional.of(prelim));
 
         PublishedResultResponse result = rankingService.publishResults(roundId, publisherId);
 
@@ -82,11 +90,23 @@ class RankingServiceTest {
     void publishResults_shouldThrow_whenNoRankings() {
         UUID roundId = UUID.randomUUID();
         when(publishedResultRepository.existsByRoundId(roundId)).thenReturn(false);
+        when(judgingPublicService.hasActiveScoreReviewsForRound(roundId)).thenReturn(false);
         when(rankingRepository.findMaxVersionByRoundId(roundId)).thenReturn(0);
 
         assertThatThrownBy(() -> rankingService.publishResults(roundId, UUID.randomUUID()))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("No rankings");
+    }
+
+    @Test
+    void publishResults_shouldThrow_whenActiveScoreReviews() {
+        UUID roundId = UUID.randomUUID();
+        when(publishedResultRepository.existsByRoundId(roundId)).thenReturn(false);
+        when(judgingPublicService.hasActiveScoreReviewsForRound(roundId)).thenReturn(true);
+
+        assertThatThrownBy(() -> rankingService.publishResults(roundId, UUID.randomUUID()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("score deviation");
     }
 
     // ── Rankings ──

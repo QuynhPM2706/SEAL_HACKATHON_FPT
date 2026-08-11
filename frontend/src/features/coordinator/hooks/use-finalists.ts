@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { finalistApi } from "@/lib/api/finalist.api";
+import { finalistApi, type SelectFinalistsRequest } from "@/lib/api/finalist.api";
 
 export const FINALISTS_KEY = "finalists" as const;
 export const FINALISTS_CONTESTED_KEY = "finalists-contested" as const;
@@ -22,15 +22,22 @@ export function useContestedFinalistSlots(eventId: string | undefined, enabled =
   });
 }
 
+export function usePreviewFinalists(eventId: string | undefined) {
+  return useMutation({
+    mutationFn: (body: SelectFinalistsRequest) => finalistApi.preview(eventId!, body),
+  });
+}
+
 export function useSelectFinalists(eventId: string | undefined) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: () => finalistApi.select(eventId!),
+    mutationFn: (body?: SelectFinalistsRequest) => finalistApi.select(eventId!, body),
     onSuccess: () => {
       if (!eventId) return;
       queryClient.invalidateQueries({ queryKey: [FINALISTS_KEY, eventId] });
       queryClient.invalidateQueries({ queryKey: [FINALISTS_CONTESTED_KEY, eventId] });
+      queryClient.invalidateQueries({ queryKey: ["livescore"] });
     },
   });
 }

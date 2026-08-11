@@ -1,6 +1,7 @@
 package com.sealhackathon.ranking.service;
 
 import com.sealhackathon.common.enums.UserType;
+import com.sealhackathon.common.util.SeasonUtils;
 import com.sealhackathon.event.domain.HackathonEvent;
 import com.sealhackathon.event.domain.Round;
 import com.sealhackathon.event.domain.enums.EventStatus;
@@ -42,9 +43,12 @@ public class SeasonRankingService {
                                                      String roundType) {
         RoundType resolvedRoundType = parseRoundType(roundType);
         boolean privilegedViewer = isPrivilegedViewer();
+        String normalizedSeason = season == null || season.isBlank()
+                ? null
+                : SeasonUtils.normalize(season);
 
         List<HackathonEvent> events = eventRepository
-                .findByFilters(null, season, year, Pageable.unpaged())
+                .findByFilters(null, normalizedSeason, year, Pageable.unpaged())
                 .getContent()
                 .stream()
                 .map(e -> eventRepository.findByIdWithDetails(e.getId()).orElse(e))
@@ -57,7 +61,7 @@ public class SeasonRankingService {
                             || resolved == EventStatus.SCORING
                             || resolved == EventStatus.COMPLETED;
                 })
-                .map(entity -> buildBoard(entity, entity.getSeason(), entity.getYear(),
+                .map(entity -> buildBoard(entity, SeasonUtils.normalize(entity.getSeason()), entity.getYear(),
                         trackId, resolvedRoundType, privilegedViewer))
                 .filter(board -> board != null && !board.getRankings().isEmpty())
                 .sorted(Comparator.comparing(EventRankingBoard::getYear).reversed()
@@ -67,7 +71,7 @@ public class SeasonRankingService {
 
     private EventRankingBoard buildBoard(HackathonEvent event, String season, Integer year, UUID trackId,
                                          RoundType roundTypeFilter, boolean privilegedViewer) {
-        Round selectedRound = resolveRound(event, roundTypeFilter);
+        Round selectedRound = resolveRound(event, roundTypeFilter, privilegedViewer);
         if (selectedRound == null) {
             return null;
         }
@@ -121,7 +125,7 @@ public class SeasonRankingService {
                 .build();
     }
 
-    private Round resolveRound(HackathonEvent event, RoundType roundTypeFilter) {
+    private Round resolveRound(HackathonEvent event, RoundType roundTypeFilter, boolean privilegedViewer) {
         if (event.getRounds() == null || event.getRounds().isEmpty()) {
             return null;
         }
@@ -136,10 +140,13 @@ public class SeasonRankingService {
                     .orElse(null);
         }
 
-        return sorted.stream()
+        // Most advanced round the viewer may see, so a published Final replaces
+        // the Preliminary board instead of staying hidden behind it.
+        return sorted.reversed().stream()
                 .filter(r -> rankingRepository.findMaxVersionByRoundId(r.getId()) > 0)
+                .filter(r -> privilegedViewer || canStudentViewRound(event, r.getId()))
                 .findFirst()
-                .orElse(sorted.getLast());
+                .orElse(null);
     }
 
     private boolean canStudentViewRound(HackathonEvent event, UUID roundId) {

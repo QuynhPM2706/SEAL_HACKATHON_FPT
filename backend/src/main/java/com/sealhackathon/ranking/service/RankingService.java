@@ -5,6 +5,8 @@ import com.sealhackathon.common.exception.ResourceNotFoundException;
 import com.sealhackathon.event.domain.Round;
 import com.sealhackathon.event.domain.enums.RoundType;
 import com.sealhackathon.event.repository.RoundRepository;
+import com.sealhackathon.event.service.EventPublicService;
+import com.sealhackathon.judging.service.JudgingPublicService;
 import com.sealhackathon.ranking.domain.PublishedResult;
 import com.sealhackathon.ranking.domain.Ranking;
 import com.sealhackathon.ranking.dto.FinalRankResult;
@@ -40,6 +42,8 @@ public class RankingService {
     private final AdvancementService advancementService;
     private final TeamPublicService teamPublicService;
     private final ApplicationEventPublisher eventPublisher;
+    private final JudgingPublicService judgingPublicService;
+    private final EventPublicService eventPublicService;
 
     private static final int DISPUTE_WINDOW_HOURS = 24;
 
@@ -96,6 +100,13 @@ public class RankingService {
                     HttpStatus.CONFLICT) {};
         }
 
+        if (judgingPublicService.hasActiveScoreReviewsForRound(roundId)) {
+            throw new BusinessException(
+                    "Cannot publish results while score deviation reviews are still open or approved. "
+                            + "Resolve all score reviews first so the judging panel reaches consensus.",
+                    HttpStatus.BAD_REQUEST) {};
+        }
+
         int version = rankingRepository.findMaxVersionByRoundId(roundId);
         if (version == 0) {
             throw new BusinessException("No rankings to publish. Run calculation first.",
@@ -115,6 +126,13 @@ public class RankingService {
                 .disputeDeadline(disputeDeadline)
                 .build();
         result = publishedResultRepository.save(result);
+
+        Round round = roundRepository.findById(roundId)
+                .orElseThrow(() -> new ResourceNotFoundException("Round", "id", roundId));
+        // Publishing Final releases the student-facing ranking / results surface.
+        if (round.getRoundType() == RoundType.FINAL && round.getHackathonEvent() != null) {
+            eventPublicService.setLeaderboardPublic(round.getHackathonEvent().getId(), true);
+        }
 
         eventPublisher.publishEvent(new ResultsPublishedEvent(
                 roundId, publisherId, now, disputeDeadline));
